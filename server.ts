@@ -22,7 +22,7 @@ const io = new Server(server, {
 app.use(express.json());
 
 // MongoDB Connection
-const MONGODB_URI = process.env.MONGODB_URI || "mongodb+srv://multitaskingryl:Intruso4123@cluster0.9qejt.mongodb.net/Anka?retryWrites=true&w=majority&appName=Cluster0";
+const MONGODB_URI = process.env.MONGODB_URI || "mongodb://localhost:27017/whatsapp-multi-session";
 
 mongoose.connect(MONGODB_URI)
   .then(() => console.log("✅ MongoDB conectado"))
