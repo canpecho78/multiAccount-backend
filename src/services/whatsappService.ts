@@ -5,6 +5,7 @@ import {
   DisconnectReason,
   ConnectionState,
 } from "@whiskeysockets/baileys";
+import P from "pino";
 import qrcode from "qrcode";
 import { Boom } from "@hapi/boom";
 import { Session } from "../models/Session";
@@ -13,6 +14,32 @@ import { Message } from "../models/Message";
 import { Server as IOServer } from "socket.io";
 import { env } from "../config/env";
 import { useMongoAuthState } from "./mongoAuthState";
+
+// Resolve Baileys makeInMemoryStore across different version layouts
+let store: any = null;
+const resolveMakeInMemoryStore = () => {
+  const candidates = [
+    () => require("@whiskeysockets/baileys").makeInMemoryStore,
+    () => require("@whiskeysockets/baileys/lib/Store").makeInMemoryStore,
+    () => require("@whiskeysockets/baileys/lib/Store/Store").makeInMemoryStore,
+    () => require("@whiskeysockets/baileys/lib/Store/index").makeInMemoryStore,
+    () => require("@whiskeysockets/baileys/lib/Utils/store").makeInMemoryStore,
+  ];
+  for (const get of candidates) {
+    try {
+      const fn = get();
+      if (typeof fn === "function") return fn;
+    } catch (_) {
+      // try next
+    }
+  }
+  return null;
+};
+
+const makeInMemoryStore = resolveMakeInMemoryStore();
+if (makeInMemoryStore) {
+  store = makeInMemoryStore({ logger: P({ level: "silent" }) });
+}
 
 export interface SessionData {
   sock: WASocket;
@@ -62,6 +89,11 @@ class WhatsAppService {
       emitOwnEvents: true,
       syncFullHistory: false,
     });
+
+    // Bind global store to this socket's event emitter (if available)
+    if (store) {
+      store.bind(sock.ev);
+    }
 
     this.sessions[sessionId] = {
       sock,
@@ -188,30 +220,39 @@ class WhatsAppService {
 
   private async loadExistingChats(
     sessionId: string,
-    sock: WASocket,
+    _sock: WASocket,
     opts?: { type?: "group" | "individual" | "all"; limit?: number }
   ) {
     try {
-      const type = (opts?.type || "all").toLowerCase() as "group" | "individual" | "all";
       const limit = Math.max(1, Math.min(500, Number(opts?.limit || 50)));
 
-      if (type === "group" || type === "all") {
-        const groups = await sock.groupFetchAllParticipating();
-        const recentGroups = Object.values(groups as any).slice(0, limit);
+      if (store) {
+        // Prefer in-memory store for individuals
+        const all = store.chats.all() as any[];
+        const individuals = all
+          .filter((c) => typeof c?.id === "string" && c.id.endsWith("@s.whatsapp.net"))
+          .sort((a, b) => Number(b.conversationTimestamp || 0) - Number(a.conversationTimestamp || 0))
+          .slice(0, limit);
 
-        for (const chat of recentGroups) {
-          const chatId = (chat as any).id as string;
-          const name = (chat as any).subject || chatId.split("@")[0] || "Desconocido";
+        for (const c of individuals) {
+          const chatId = c.id as string;
+          const name = (c.name || c.subject || chatId.split("@")[0] || "Desconocido") as string;
+          const lastMessageTime = c.conversationTimestamp ? new Date(Number(c.conversationTimestamp) * 1000) : undefined;
 
           await Chat.findOneAndUpdate(
             { chatId, sessionId },
-            { name, phone: chatId, unreadCount: 0, updatedAt: new Date() },
+            {
+              name,
+              phone: chatId,
+              lastMessageTime: lastMessageTime ?? new Date(),
+              unreadCount: 0,
+              updatedAt: new Date(),
+            },
             { upsert: true, new: true }
           );
         }
-      }
-      // Preload individual chats from recent messages in MongoDB
-      if (type === "individual" || type === "all") {
+      } else {
+        // Fallback: preload individuals from Mongo recent messages
         const pipeline = [
           { $match: { sessionId, chatId: { $regex: /@s\\.whatsapp\\.net$/ } } },
           { $sort: { timestamp: -1 } },
@@ -227,7 +268,7 @@ class WhatsAppService {
 
         const recentIndividuals = await Message.aggregate(pipeline as any);
         for (const doc of recentIndividuals as any[]) {
-          const chatId = doc._id as string; // @s.whatsapp.net
+          const chatId = doc._id as string;
           const name = chatId.split("@")[0] || "Desconocido";
           await Chat.findOneAndUpdate(
             { chatId, sessionId },
@@ -247,6 +288,8 @@ class WhatsAppService {
     }
   }
 
+
+  
   async sendMessage(sessionId: string, to: string, text: string) {
     const session = this.sessions[sessionId];
     if (!session || !session.isConnected) throw new Error("Sesión no conectada");
