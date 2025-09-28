@@ -95,7 +95,11 @@ class WhatsAppService {
           { upsert: true }
         );
         this.io?.emit("connected", { sessionId, status: true });
-        await this.loadExistingChats(sessionId, sock);
+        // Preload a limited set of chats after connection opens
+        await this.loadExistingChats(sessionId, sock, {
+          type: (process.env.PRELOAD_CHATS_TYPE as any) || "all",
+          limit: Number(process.env.PRELOAD_CHATS_LIMIT || 50),
+        });
       } else if (connection === "close") {
         const shouldReconnect = (lastDisconnect?.error as Boom)?.output?.statusCode !== DisconnectReason.loggedOut;
         this.sessions[sessionId].isConnected = false;
@@ -159,7 +163,6 @@ class WhatsAppService {
           sessionId,
           name: contactName,
           phone: from,
-          lastMessage: messageContent,
           lastMessageTime: timestamp,
           unreadCount: 1,
         });
@@ -183,20 +186,61 @@ class WhatsAppService {
     }
   }
 
-  private async loadExistingChats(sessionId: string, sock: WASocket) {
+  private async loadExistingChats(
+    sessionId: string,
+    sock: WASocket,
+    opts?: { type?: "group" | "individual" | "all"; limit?: number }
+  ) {
     try {
-      const groups = await sock.groupFetchAllParticipating();
-      const recentChats = Object.values(groups as any);
+      const type = (opts?.type || "all").toLowerCase() as "group" | "individual" | "all";
+      const limit = Math.max(1, Math.min(500, Number(opts?.limit || 50)));
 
-      for (const chat of recentChats) {
-        const chatId = (chat as any).id;
-        const name = (chat as any).subject || chatId.split("@")[0] || "Desconocido";
+      if (type === "group" || type === "all") {
+        const groups = await sock.groupFetchAllParticipating();
+        const recentGroups = Object.values(groups as any).slice(0, limit);
 
-        await Chat.findOneAndUpdate(
-          { chatId, sessionId },
-          { name, phone: chatId, unreadCount: 0, updatedAt: new Date() },
-          { upsert: true, new: true }
-        );
+        for (const chat of recentGroups) {
+          const chatId = (chat as any).id as string;
+          const name = (chat as any).subject || chatId.split("@")[0] || "Desconocido";
+
+          await Chat.findOneAndUpdate(
+            { chatId, sessionId },
+            { name, phone: chatId, unreadCount: 0, updatedAt: new Date() },
+            { upsert: true, new: true }
+          );
+        }
+      }
+      // Preload individual chats from recent messages in MongoDB
+      if (type === "individual" || type === "all") {
+        const pipeline = [
+          { $match: { sessionId, chatId: { $regex: /@s\\.whatsapp\\.net$/ } } },
+          { $sort: { timestamp: -1 } },
+          {
+            $group: {
+              _id: "$chatId",
+              lastMessage: { $first: "$body" },
+              lastMessageTime: { $first: "$timestamp" },
+            },
+          },
+          { $limit: limit },
+        ];
+
+        const recentIndividuals = await Message.aggregate(pipeline as any);
+        for (const doc of recentIndividuals as any[]) {
+          const chatId = doc._id as string; // @s.whatsapp.net
+          const name = chatId.split("@")[0] || "Desconocido";
+          await Chat.findOneAndUpdate(
+            { chatId, sessionId },
+            {
+              name,
+              phone: chatId,
+              lastMessage: doc.lastMessage,
+              lastMessageTime: doc.lastMessageTime,
+              updatedAt: new Date(),
+            },
+            { upsert: true, new: true }
+          );
+        }
       }
     } catch (error) {
       console.error("Error loading existing chats:", error);
