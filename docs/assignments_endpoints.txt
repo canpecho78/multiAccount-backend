@@ -1,0 +1,165 @@
+ASSIGNMENTS API - Documentación de Endpoints
+
+Base path: /api/sessions/{sessionId}
+Auth: Bearer JWT
+
+Modelo Assignment (según src/models/Assignment.ts):
+- _id: string (ObjectId)
+- sessionId: string
+- chatId: string
+- user: string (ObjectId ref User)
+- active: boolean
+- assignedAt: string (ISO date)
+- unassignedAt: string|null (ISO date)
+
+1) Asignar chat a usuario
+- Método: POST
+- URL: /api/sessions/{sessionId}/assignments
+- Auth: Requerido (verifyJWT)
+- Roles: administrator, supervisor
+- Path params:
+  - sessionId: string (obligatorio)
+- Request body (application/json):
+  {
+    "chatId": "string",  // obligatorio
+    "userId": "string"   // obligatorio (ObjectId de User)
+  }
+- Respuestas:
+  - 201 Created
+    {
+      "success": true,
+      "data": {
+        "_id": "string",
+        "sessionId": "string",
+        "chatId": "string",
+        "user": "string",          // ObjectId
+        "active": true,
+        "assignedAt": "2025-01-01T00:00:00.000Z",
+        "unassignedAt": null
+      }
+    }
+  - 400 Bad Request (faltan campos)
+    { "success": false, "error": "chatId y userId requeridos" }
+  - 400 Bad Request (usuario inválido/inactivo)
+    { "success": false, "error": "Usuario inválido" }
+  - 401 Unauthorized (token inválido)
+
+Notas: upsert activa o crea la asignación única activa por (sessionId, chatId, user).
+
+2) Desasignar chat de usuario
+- Método: DELETE
+- URL: /api/sessions/{sessionId}/assignments/{assignmentId}
+- Auth: Requerido (verifyJWT)
+- Roles: administrator, supervisor
+- Path params:
+  - sessionId: string (obligatorio)
+  - assignmentId: string (ObjectId de Assignment, obligatorio)
+- Request body: N/A
+- Respuestas:
+  - 200 OK
+    {
+      "success": true,
+      "data": {
+        "_id": "string",
+        "sessionId": "string",
+        "chatId": "string",
+        "user": "string",
+        "active": false,
+        "assignedAt": "2025-01-01T00:00:00.000Z",
+        "unassignedAt": "2025-01-01T01:00:00.000Z"
+      }
+    }
+  - 404 Not Found
+    { "success": false, "error": "Asignación no encontrada" }
+  - 401 Unauthorized (token inválido)
+
+3) Listar asignaciones
+- Método: GET
+- URL: /api/sessions/{sessionId}/assignments
+- Auth: Requerido (verifyJWT)
+- Path params:
+  - sessionId: string (obligatorio)
+- Query params (opcionales):
+  - chatId: string
+  - userId: string
+  - active: boolean ("true" | "false")
+- Request body: N/A
+- Respuestas:
+  - 200 OK
+    {
+      "success": true,
+      "data": [
+        {
+          "_id": "string",
+          "sessionId": "string",
+          "chatId": "string",
+          "user": {                // puede venir populado según controlador
+            "_id": "string",
+            // ...otros campos de User si populate
+          },
+          "active": true,
+          "assignedAt": "2025-01-01T00:00:00.000Z",
+          "unassignedAt": null
+        }
+      ]
+    }
+  - 401 Unauthorized (token inválido)
+
+4) Listar asignaciones activas de un usuario
+- Método: GET
+- URL: /api/sessions/{sessionId}/assignments/user/{userId}
+- Auth: Requerido (verifyJWT)
+- Path params:
+  - sessionId: string (obligatorio)
+  - userId: string (obligatorio)
+- Request body: N/A
+- Respuestas:
+  - 200 OK
+    {
+      "success": true,
+      "data": [
+        {
+          "_id": "string",
+          "sessionId": "string",
+          "chatId": "string",
+          "user": "string",      // ObjectId
+          "active": true,
+          "assignedAt": "2025-01-01T00:00:00.000Z",
+          "unassignedAt": null
+        }
+      ]
+    }
+  - 401 Unauthorized (token inválido)
+
+5) Listar mis chats asignados (usuario autenticado)
+- Método: GET
+- URL: /api/sessions/{sessionId}/assignments/me
+- Auth: Requerido (verifyJWT)
+- Path params:
+  - sessionId: string (obligatorio)
+- Request body: N/A
+- Respuestas:
+  - 200 OK
+    {
+      "success": true,
+      "data": [
+        {
+          "_id": "string",
+          "sessionId": "string",
+          "chatId": "string",
+          "user": "string",      // authUser.sub
+          "active": true,
+          "assignedAt": "2025-01-01T00:00:00.000Z",
+          "unassignedAt": null
+        }
+      ]
+    }
+  - 401 Unauthorized
+    { "success": false, "error": "No autenticado" }
+
+Seguridad y roles (según src/routes/assignmentRoutes.ts):
+- POST /assignments: verifyJWT + requireRoles("administrator", "supervisor")
+- DELETE /assignments/{assignmentId}: verifyJWT + requireRoles("administrator", "supervisor")
+- GET /assignments: verifyJWT
+- GET /assignments/user/{userId}: verifyJWT
+- GET /assignments/me: verifyJWT

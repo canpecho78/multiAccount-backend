@@ -10,6 +10,8 @@ import authRoutes from "./routes/authRoutes";
 import roleRoutes from "./routes/roleRoutes";
 import userRoutes from "./routes/userRoutes";
 import assignmentRoutes from "./routes/assignmentRoutes";
+import adminRoutes from "./routes/adminRoutes";
+import sessionStatsRoutes from "./routes/sessionStats";
 
 const app = express();
 
@@ -35,5 +37,9 @@ app.use("/api/sessions", sessionRoutes);
 app.use("/api/sessions", chatRoutes);
 app.use("/api/sessions", messageRoutes);
 app.use("/api/sessions", assignmentRoutes);
+app.use("/api/sessions", sessionStatsRoutes);
+
+// Admin routes
+app.use("/api/admin", adminRoutes);
 
 export default app;

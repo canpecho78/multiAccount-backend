@@ -48,7 +48,7 @@ router.get("/", verifyJWT, getSessions);
  *       200:
  *         description: Sesión iniciada
  */
-router.post("/", verifyJWT, requireRoles("administrator"), createSession);
+router.post("/", verifyJWT, requireRoles("administrator","supervisor"), createSession);
 
 /**
  * @swagger

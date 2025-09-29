@@ -14,6 +14,12 @@ const ChatSchema = new mongoose.Schema({
   updatedAt: { type: Date, default: Date.now },
 });
 
+// Índice único compuesto para evitar duplicados
+ChatSchema.index({ chatId: 1, sessionId: 1 }, { unique: true });
+
+// Índice para búsquedas por sesión
+ChatSchema.index({ sessionId: 1, lastMessageTime: -1 });
+
 export type ChatDoc = mongoose.Document & {
   chatId: string;
   sessionId: string;

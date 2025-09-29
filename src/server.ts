@@ -5,6 +5,7 @@ import { connectDB } from "./config/db";
 import { env } from "./config/env";
 import { registerSocketHandlers } from "./sockets";
 import { whatsappService } from "./services/whatsappService";
+import { cleanupService } from "./services/cleanupService";
 
 async function bootstrap() {
   await connectDB();
@@ -16,21 +17,26 @@ async function bootstrap() {
 
   server.listen(env.port, async () => {
     console.log(`✅ Backend corriendo en http://localhost:${env.port}`);
+    
+    // Inicializar sesiones existentes
     setTimeout(() => whatsappService.initializeExistingSessions(), 2000);
+    
+    // Iniciar servicio de limpieza automática
+    setTimeout(() => cleanupService.start(), 5000);
   });
 
-  // Limpieza periódica de sesiones en memoria
-  setInterval(() => {
-    const all = whatsappService.getAllSessions();
-    const now = Date.now();
-    for (const [sessionId, data] of Object.entries(all)) {
-      const diff = now - data.lastSeen.getTime();
-      if (diff > 5 * 60 * 1000 && !data.isConnected) {
-        console.log(`🧹 Limpiando sesión inactiva: ${sessionId}`);
-        // Mantener en memoria si se desea reconexión; aquí solo logueamos
-      }
-    }
-  }, 5 * 60 * 1000);
+  // Manejo de cierre graceful
+  process.on("SIGINT", () => {
+    console.log("\n🛑 Cerrando servidor...");
+    cleanupService.stop();
+    process.exit(0);
+  });
+
+  process.on("SIGTERM", () => {
+    console.log("\n🛑 Cerrando servidor...");
+    cleanupService.stop();
+    process.exit(0);
+  });
 }
 
 bootstrap().catch((err) => {

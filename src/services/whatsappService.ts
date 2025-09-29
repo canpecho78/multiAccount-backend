@@ -1,6 +1,5 @@
 import {
   default as makeWASocket,
-  useMultiFileAuthState,
   WASocket,
   DisconnectReason,
   ConnectionState,
@@ -12,8 +11,8 @@ import { Session } from "../models/Session";
 import { Chat } from "../models/Chat";
 import { Message } from "../models/Message";
 import { Server as IOServer } from "socket.io";
-import { env } from "../config/env";
 import { useMongoAuthState } from "./mongoAuthState";
+import { sessionManager } from "./sessionManager";
 
 // Resolve Baileys makeInMemoryStore across different version layouts
 let store: any = null;
@@ -75,10 +74,13 @@ class WhatsAppService {
   }
 
   async createSession(sessionId: string) {
-    const { state, saveCreds } =
-      env.authStorage === "mongo"
-        ? await useMongoAuthState(sessionId)
-        : await useMultiFileAuthState(`${env.authBasePath}/${sessionId}`);
+    // Registrar sesión en MongoDB
+    await sessionManager.createOrUpdateSession(sessionId, {
+      status: "pending",
+      isActive: true,
+    } as any);
+
+    const { state, saveCreds } = await useMongoAuthState(sessionId);
 
     const sock = makeWASocket({
       auth: state,
@@ -107,41 +109,54 @@ class WhatsAppService {
       if (qr) {
         try {
           const qrImage = await qrcode.toDataURL(qr);
-          await Session.findOneAndUpdate(
-            { sessionId },
-            { qrCode: qrImage, isConnected: false, updatedAt: new Date() },
-            { upsert: true, new: true }
-          );
+          await sessionManager.updateQRCode(sessionId, qrImage);
           this.io?.emit("qr", { sessionId, qr: qrImage });
         } catch (err) {
           console.error("Error generating QR", err);
+          await sessionManager.recordConnectionAttempt(sessionId, false, "QR generation failed");
         }
       }
 
       if (connection === "open") {
         this.sessions[sessionId].isConnected = true;
         this.sessions[sessionId].lastSeen = new Date();
-        await Session.findOneAndUpdate(
-          { sessionId },
-          { isConnected: true, lastActivity: new Date(), qrCode: null, updatedAt: new Date() },
-          { upsert: true }
-        );
-        this.io?.emit("connected", { sessionId, status: true });
-        // Preload a limited set of chats after connection opens
-        await this.loadExistingChats(sessionId, sock, {
-          type: (process.env.PRELOAD_CHATS_TYPE as any) || "all",
-          limit: Number(process.env.PRELOAD_CHATS_LIMIT || 50),
+        
+        // Obtener información del dispositivo
+        const phone = sock.user?.id?.split(":")[0] || null;
+        const name = sock.user?.name || "Unknown";
+        
+        await sessionManager.updateConnectionStatus(sessionId, true, "connected", {
+          phone: phone || undefined,
+          name,
+          platform: "whatsapp",
         });
+        
+        this.io?.emit("connected", { sessionId, status: true });
+        
+        // Preload SOLO chats individuales (no grupos) - más recientes
+        await this.loadExistingChats(sessionId, sock, {
+          type: "individual", // SOLO personas, NO grupos
+          limit: Number(process.env.PRELOAD_CHATS_LIMIT || 30), // Límite reducido por defecto
+        });
+        
+        // Actualizar conteo de chats
+        await sessionManager.updateChatCount(sessionId);
       } else if (connection === "close") {
         const shouldReconnect = (lastDisconnect?.error as Boom)?.output?.statusCode !== DisconnectReason.loggedOut;
+        const reason = (lastDisconnect?.error as any)?.message || "Connection closed";
+        
         this.sessions[sessionId].isConnected = false;
-        await Session.findOneAndUpdate({ sessionId }, { isConnected: false, updatedAt: new Date() });
+        
+        await sessionManager.updateConnectionStatus(sessionId, false, "disconnected");
+        await sessionManager.recordConnectionAttempt(sessionId, false, reason);
+        
         this.io?.emit("connected", { sessionId, status: false });
 
         if (shouldReconnect) {
           setTimeout(() => this.createSession(sessionId), 5000);
         } else {
           delete this.sessions[sessionId];
+          await sessionManager.markAsInactive(sessionId, "Logged out");
         }
       }
     });
@@ -173,39 +188,66 @@ class WhatsAppService {
       const messageId = msg.key.id;
       const timestamp = new Date(msg.messageTimestamp * 1000);
 
-      await Message.create({
-        messageId,
-        chatId: from,
-        sessionId,
-        from,
-        to: sessionId,
-        body: messageContent,
-        fromMe: false,
-        timestamp,
-        messageType: Object.keys(msg.message)[0],
-        status: "delivered",
-      });
+      console.log(`📨 Mensaje recibido de ${from} en sesión ${sessionId}`);
 
-      let chat = await Chat.findOne({ chatId: from, sessionId });
-
-      if (!chat) {
-        const contactName = msg.pushName || from.split("@")[0] || "Desconocido";
-        chat = await Chat.create({
+      // Guardar mensaje
+      try {
+        await Message.create({
+          messageId,
           chatId: from,
           sessionId,
-          name: contactName,
-          phone: from,
-          lastMessageTime: timestamp,
-          unreadCount: 1,
+          from,
+          to: sessionId,
+          body: messageContent,
+          fromMe: false,
+          timestamp,
+          messageType: Object.keys(msg.message)[0],
+          status: "delivered",
         });
-      } else {
-        chat.lastMessage = messageContent;
-        chat.lastMessageTime = timestamp;
-        chat.unreadCount += 1;
-        chat.updatedAt = new Date();
-        await chat.save();
+        console.log(`✅ Mensaje guardado: ${messageId}`);
+      } catch (msgError) {
+        console.error(`❌ Error guardando mensaje:`, msgError);
       }
 
+      // Incrementar contador de mensajes recibidos
+      try {
+        await sessionManager.incrementMessageCount(sessionId, "received");
+      } catch (countError) {
+        console.error(`❌ Error incrementando contador:`, countError);
+      }
+
+      // Guardar o actualizar chat
+      try {
+        const contactName = msg.pushName || from.split("@")[0] || "Desconocido";
+        
+        const chat = await Chat.findOneAndUpdate(
+          { chatId: from, sessionId },
+          {
+            $set: {
+              name: contactName,
+              phone: from,
+              lastMessage: messageContent,
+              lastMessageTime: timestamp,
+              updatedAt: new Date(),
+            },
+            $inc: { unreadCount: 1 },
+            $setOnInsert: {
+              chatId: from,
+              sessionId,
+              isArchived: false,
+              isPinned: false,
+              createdAt: new Date(),
+            },
+          },
+          { upsert: true, new: true }
+        );
+
+        console.log(`✅ Chat guardado/actualizado: ${from} (${chat.name})`);
+      } catch (chatError) {
+        console.error(`❌ Error guardando chat ${from}:`, chatError);
+      }
+
+      // Emitir evento Socket.IO
       this.io?.emit("message", {
         sessionId,
         from,
@@ -214,7 +256,7 @@ class WhatsAppService {
         messageId,
       });
     } catch (error) {
-      console.error("Error handling incoming message:", error);
+      console.error("❌ Error general handling incoming message:", error);
     }
   }
 
@@ -224,38 +266,74 @@ class WhatsAppService {
     opts?: { type?: "group" | "individual" | "all"; limit?: number }
   ) {
     try {
-      const limit = Math.max(1, Math.min(500, Number(opts?.limit || 50)));
+      // Limitar a máximo 100 chats para no saturar el servidor
+      const limit = Math.max(1, Math.min(100, Number(opts?.limit || 30)));
+
+      console.log(`📱 Cargando chats individuales para sesión ${sessionId} (límite: ${limit})...`);
 
       if (store) {
-        // Prefer in-memory store for individuals
+        // Cargar solo chats individuales desde el store en memoria
         const all = store.chats.all() as any[];
+        
+        // Filtrar SOLO chats individuales (ignorar grupos)
+        // Los chats individuales terminan en @s.whatsapp.net
+        // Los grupos terminan en @g.us
         const individuals = all
-          .filter((c) => typeof c?.id === "string" && c.id.endsWith("@s.whatsapp.net"))
-          .sort((a, b) => Number(b.conversationTimestamp || 0) - Number(a.conversationTimestamp || 0))
+          .filter((c) => {
+            if (!c?.id || typeof c.id !== "string") return false;
+            
+            // SOLO chats individuales (personas)
+            const isIndividual = c.id.endsWith("@s.whatsapp.net");
+            
+            // Ignorar grupos explícitamente
+            const isGroup = c.id.endsWith("@g.us");
+            
+            return isIndividual && !isGroup;
+          })
+          // Ordenar por más recientes primero
+          .sort((a, b) => {
+            const timeA = Number(a.conversationTimestamp || 0);
+            const timeB = Number(b.conversationTimestamp || 0);
+            return timeB - timeA; // Más recientes primero
+          })
+          // Limitar cantidad
           .slice(0, limit);
 
+        console.log(`✅ Encontrados ${individuals.length} chats individuales en store`);
+
+        // Guardar en MongoDB
         for (const c of individuals) {
           const chatId = c.id as string;
           const name = (c.name || c.subject || chatId.split("@")[0] || "Desconocido") as string;
-          const lastMessageTime = c.conversationTimestamp ? new Date(Number(c.conversationTimestamp) * 1000) : undefined;
+          const lastMessageTime = c.conversationTimestamp 
+            ? new Date(Number(c.conversationTimestamp) * 1000) 
+            : new Date();
 
           await Chat.findOneAndUpdate(
             { chatId, sessionId },
             {
               name,
               phone: chatId,
-              lastMessageTime: lastMessageTime ?? new Date(),
-              unreadCount: 0,
+              lastMessageTime,
+              unreadCount: Number(c.unreadCount || 0),
               updatedAt: new Date(),
             },
             { upsert: true, new: true }
           );
         }
       } else {
-        // Fallback: preload individuals from Mongo recent messages
+        // Fallback: cargar solo chats individuales desde MongoDB
+        console.log(`📦 Cargando chats individuales desde MongoDB...`);
+        
         const pipeline = [
-          { $match: { sessionId, chatId: { $regex: /@s\\.whatsapp\\.net$/ } } },
-          { $sort: { timestamp: -1 } },
+          { 
+            $match: { 
+              sessionId, 
+              // SOLO chats individuales (personas)
+              chatId: { $regex: /@s\\.whatsapp\\.net$/ } 
+            } 
+          },
+          { $sort: { timestamp: -1 } }, // Más recientes primero
           {
             $group: {
               _id: "$chatId",
@@ -267,9 +345,13 @@ class WhatsAppService {
         ];
 
         const recentIndividuals = await Message.aggregate(pipeline as any);
+        
+        console.log(`✅ Encontrados ${recentIndividuals.length} chats individuales en MongoDB`);
+        
         for (const doc of recentIndividuals as any[]) {
           const chatId = doc._id as string;
           const name = chatId.split("@")[0] || "Desconocido";
+          
           await Chat.findOneAndUpdate(
             { chatId, sessionId },
             {
@@ -283,8 +365,10 @@ class WhatsAppService {
           );
         }
       }
+      
+      console.log(`✅ Chats individuales cargados correctamente para ${sessionId}`);
     } catch (error) {
-      console.error("Error loading existing chats:", error);
+      console.error("❌ Error loading existing chats:", error);
     }
   }
 
@@ -310,6 +394,9 @@ class WhatsAppService {
       status: "sent",
     });
 
+    // Incrementar contador de mensajes enviados
+    await sessionManager.incrementMessageCount(sessionId, "sent");
+
     await Chat.findOneAndUpdate(
       { chatId: to, sessionId },
       { lastMessage: text, lastMessageTime: new Date(), updatedAt: new Date() },
@@ -324,7 +411,7 @@ class WhatsAppService {
     if (!s) return;
     await s.sock.logout();
     delete this.sessions[sessionId];
-    await Session.findOneAndUpdate({ sessionId }, { isConnected: false, updatedAt: new Date() });
+    await sessionManager.markAsInactive(sessionId, "Manual disconnect");
   }
 }
 
