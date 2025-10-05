@@ -13,6 +13,8 @@ import assignmentRoutes from "./routes/assignmentRoutes";
 import adminRoutes from "./routes/adminRoutes";
 import sessionStatsRoutes from "./routes/sessionStats";
 import mediaRoutes from "./routes/mediaRoutes";
+import profilePictureRoutes from "./routes/profilePictureRoutes";
+import audioRoutes from "./routes/audioRoutes";
 
 const app = express();
 
@@ -42,6 +44,12 @@ app.use("/api/sessions", sessionStatsRoutes);
 
 // Media routes
 app.use("/api/media", mediaRoutes);
+
+// Profile Picture routes
+app.use("/api/profile-picture", profilePictureRoutes);
+
+// Audio routes
+app.use("/api/audio", audioRoutes);
 
 // Admin routes
 app.use("/api/admin", adminRoutes);

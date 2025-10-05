@@ -4,6 +4,7 @@ import {
   DisconnectReason,
   ConnectionState,
   downloadMediaMessage,
+  WAMessage,
 } from "@whiskeysockets/baileys";
 import P from "pino";
 import qrcode from "qrcode";
@@ -15,6 +16,9 @@ import { Media } from "../models/Media";
 import { Server as IOServer } from "socket.io";
 import { useMongoAuthState } from "./mongoAuthState";
 import { sessionManager } from "./sessionManager";
+import { PassThrough } from "stream";
+import { audioConversionService } from "./audioConversionService";
+
 
 // Resolve Baileys makeInMemoryStore across different version layouts
 let store: any = null;
@@ -177,7 +181,42 @@ class WhatsAppService {
   }
 
   /**
-   * Obtener foto de perfil de un contacto y guardar en MongoDB
+   * Obtener fotos de perfil de un contacto en diferentes resoluciones
+   */
+  async getProfilePictureMultiple(sessionId: string, jid: string): Promise<{
+    lowRes: string | null;
+    highRes: string | null;
+  } | null> {
+    try {
+      const session = this.sessions[sessionId];
+      if (!session || !session.isConnected) {
+        throw new Error("Sesión no conectada");
+      }
+
+      // Intentar obtener ambas resoluciones
+      const [lowResUrl, highResUrl] = await Promise.all([
+        session.sock.profilePictureUrl(jid).catch(() => null),
+        session.sock.profilePictureUrl(jid, "image").catch(() => null)
+      ]);
+
+      if (!lowResUrl && !highResUrl) {
+        console.log(`No profile picture found for ${jid}`);
+        return null;
+      }
+
+      // Por ahora devolvemos las URLs, pero podrían ser guardadas en MongoDB
+      return {
+        lowRes: lowResUrl || null,
+        highRes: highResUrl || null
+      };
+    } catch (error) {
+      console.error(`Error getting multiple profile pictures for ${jid}:`, error);
+      return null;
+    }
+  }
+
+  /**
+   * Obtener foto de perfil de un contacto y guardar en MongoDB (versión simplificada)
    */
   async getProfilePicture(sessionId: string, jid: string): Promise<string | null> {
     try {
@@ -289,8 +328,9 @@ class WhatsAppService {
       // Determinar tipo y extensión
       let mediaTypeSimple: "image" | "video" | "audio" | "document" | "sticker" | "voice" = "document";
       let extension = "";
+      let finalBuffer = buffer as Buffer;
       const mediaInfo = msg.message[messageType];
-      const mimetype = mediaInfo?.mimetype || "application/octet-stream";
+      let mimetype = mediaInfo?.mimetype || "application/octet-stream";
       const isVoiceNote = mediaInfo?.ptt || false;
 
       switch (messageType) {
@@ -304,7 +344,36 @@ class WhatsAppService {
           break;
         case "audioMessage":
           mediaTypeSimple = isVoiceNote ? "voice" : "audio";
-          extension = isVoiceNote ? "ogg" : "mp3";
+          
+          // CONVERSIÓN AUTOMÁTICA A MP3
+          console.log(`🎵 Converting ${isVoiceNote ? 'voice note' : 'audio'} to MP3...`);
+          try {
+            const conversionResult = await audioConversionService.convertToMP3(
+              finalBuffer,
+              'ogg', // WhatsApp envía OGG Opus
+              {
+                quality: isVoiceNote ? 'high' : 'medium',
+                bitrate: isVoiceNote ? '192k' : '128k',
+                sampleRate: isVoiceNote ? 48000 : 44100,
+                channels: isVoiceNote ? 1 : 2, // Mono para notas de voz
+              }
+            );
+
+            if (conversionResult.success && conversionResult.buffer) {
+              finalBuffer = conversionResult.buffer;
+              mimetype = conversionResult.mimetype || 'audio/mpeg';
+              extension = "mp3";
+              console.log(`✅ Audio converted successfully to MP3 (${finalBuffer.length} bytes)`);
+            } else {
+              console.error(`❌ Audio conversion failed: ${conversionResult.error}`);
+              // Usar formato original si falla la conversión
+              extension = isVoiceNote ? "ogg" : "mp3";
+            }
+          } catch (convError) {
+            console.error(`❌ Audio conversion error:`, convError);
+            // Usar formato original si falla la conversión
+            extension = isVoiceNote ? "ogg" : "mp3";
+          }
           break;
         case "documentMessage":
           mediaTypeSimple = "document";
@@ -329,7 +398,7 @@ class WhatsAppService {
       const caption = mediaInfo?.caption || null;
       const originalFilename = mediaInfo?.fileName || null;
 
-      // Guardar en MongoDB
+      // Guardar en MongoDB (usando buffer convertido)
       await Media.create({
         fileId,
         messageId,
@@ -339,8 +408,8 @@ class WhatsAppService {
         filename,
         originalFilename,
         mimetype,
-        size: (buffer as Buffer).length,
-        data: buffer as Buffer,
+        size: finalBuffer.length,
+        data: finalBuffer, // Usar el buffer ya convertido a MP3
         width,
         height,
         duration,
@@ -357,7 +426,7 @@ class WhatsAppService {
         type: messageType,
         filename,
         mimetype,
-        size: (buffer as Buffer).length,
+        size: finalBuffer.length,
         isVoiceNote,
       };
     } catch (error) {
@@ -707,6 +776,236 @@ class WhatsAppService {
     await s.sock.logout();
     delete this.sessions[sessionId];
     await sessionManager.markAsInactive(sessionId, "Manual disconnect");
+  }
+
+  /**
+   * Descargar audio como stream desde mensaje
+   */
+  async downloadAudioAsStream(
+    message: WAMessage, 
+    sessionId: string
+  ): Promise<NodeJS.ReadableStream | any> {
+    try {
+      const session = this.sessions[sessionId];
+      if (!session || !session.isConnected) {
+        throw new Error("Sesión no conectada");
+      }
+
+      const stream = await downloadMediaMessage(
+        message,
+        'stream',
+        {},
+        {
+          logger: P({ level: "silent" }),
+          reuploadRequest: () => Promise.resolve({} as any),
+        }
+      );
+
+      if (!stream) {
+        throw new Error("Failed to download audio stream");
+      }
+
+      return stream;
+    } catch (error) {
+      console.error("Error downloading audio as stream:", error);
+      throw error;
+    }
+  }
+
+  /**
+   * Descargar audio como buffer desde mensaje
+   */
+  async downloadAudioAsBuffer(
+    message: WAMessage,
+    sessionId: string
+  ): Promise<Buffer> {
+    try {
+      const session = this.sessions[sessionId];
+      if (!session || !session.isConnected) {
+        throw new Error("Sesión no conectada");
+      }
+
+      const buffer = await downloadMediaMessage(
+        message,
+        'buffer',
+        {},
+        {
+          logger: P({ level: "silent" }),
+          reuploadRequest: () => Promise.resolve({} as any),
+        }
+      );
+
+      if (!buffer) {
+        throw new Error("Failed to download audio buffer");
+      }
+
+      return buffer;
+    } catch (error) {
+      console.error("Error downloading audio as buffer:", error);
+      throw error;
+    }
+  }
+
+  /**
+   * Enviar audio desde archivo local/ruta
+   */
+  async sendAudioFromPath(
+    t0: string,
+    audioPath: string,
+    options?: {
+      isVoiceNote?: boolean;
+      caption?: string;
+      mimetype?: string;
+    }
+  ) {
+    try {
+      if (!t0) throw new Error("Session ID is required");
+      
+      const session = this.sessions[t0];
+      if (!session || !session.isConnected) {
+        throw new Error("Sesión no conectada");
+      }
+
+      const audioOptions: any = {
+        audio: { url: audioPath },
+        mimetype: options?.mimetype || (options?.isVoiceNote ? 'audio/ogg; codecs=opus' : 'audio/mp4'),
+        ptt: options?.isVoiceNote || false,
+      };
+
+      if (options?.caption) {
+        audioOptions.caption = options.caption;
+      }
+
+      await session.sock.sendMessage(t0, audioOptions);
+      console.log('Audio sent successfully from path:', audioPath);
+    } catch (error) {
+      console.error('Error sending audio from path:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Descargar audio desde una URL externa y enviarlo
+   */
+  async sendAudioFromUrl(
+    sessionId: string,
+    to: string,
+    audioUrl: string,
+    options?: {
+      isVoiceNote?: boolean;
+      caption?: string;
+      mimetype?: string;
+    }
+  ) {
+    try {
+      const session = this.sessions[sessionId];
+      if (!session || !session.isConnected) {
+        throw new Error("Sesión no conectada");
+      }
+
+      // Descargar audio desde URL
+      const response = await fetch(audioUrl);
+      const arrayBuffer = await response.arrayBuffer();
+      const buffer = Buffer.from(arrayBuffer);
+
+      const audioOptions: any = {
+        audio: buffer,
+        mimetype: options?.mimetype || (options?.isVoiceNote ? 'audio/ogg; codecs=opus' : 'audio/mp4'),
+        ptt: options?.isVoiceNote || false,
+      };
+
+      if (options?.caption) {
+        audioOptions.caption = options.caption;
+      }
+
+      await session.sock.sendMessage(to, audioOptions);
+      console.log('Audio sent successfully from URL:', audioUrl);
+    } catch (error) {
+      console.error('Error sending audio from URL:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Crear imagen para reproducción en stream
+   */
+  async createAudioStream(
+    message: WAMessage,
+    sessionId: string,
+    options?: { start?: number; end?: number }
+  ): Promise<NodeJS.ReadableStream> {
+    try {
+      const stream = await this.downloadAudioAsStream(message, sessionId);
+      
+      // Si se especifican rangos, crear un PassThrough stream con rango
+      if (options?.start !== undefined || options?.end !== undefined) {
+        const rangeStream = new PassThrough();
+        let bytesRead = 0;
+        const startByte = options.start || 0;
+        const endByte = options.end || Infinity;
+
+        (stream as any).on('data', (chunk: Buffer) => {
+          if (bytesRead + chunk.length < startByte) {
+            bytesRead += chunk.length;
+            return; // Skip este chunk
+          }
+
+          if (bytesRead >= endByte) {
+            (stream as any).destroy?.();
+            return;
+          }
+
+          const chunkStart = Math.max(0, startByte - bytesRead);
+          const chunkEnd = Math.min(chunk.length, endByte - bytesRead);
+          const slicedChunk = chunk.slice(chunkStart, chunkEnd);
+
+          if (slicedChunk.length > 0) {
+            rangeStream.push(slicedChunk);
+          }
+
+          bytesRead += chunk.length;
+
+          if (bytesRead >= endByte) {
+            (stream as any).destroy?.();
+          }
+        });
+
+        (stream as any).on('end', () => rangeStream.end());
+        (stream as any).on('error', (err: any) => rangeStream.destroy(err));
+
+        return rangeStream;
+      }
+
+      return stream;
+    } catch (error) {
+      console.error("Error creating audio stream:", error);
+      throw error;
+    }
+  }
+
+  /**
+   * Obtener metadata de audio desde mensaje
+   */
+  getAudioMetadata(message: WAMessage): {
+    duration?: number;
+    mimetype?: string;
+    size?: number;
+    isVoiceNote?: boolean;
+  } | null {
+    try {
+      const audioMessage = message.message?.audioMessage;
+      if (!audioMessage) return null;
+
+      return {
+        duration: typeof audioMessage.seconds === 'number' ? audioMessage.seconds : undefined,
+        mimetype: audioMessage.mimetype || undefined,
+        size: typeof audioMessage.fileLength === 'number' ? audioMessage.fileLength : undefined,
+        isVoiceNote: audioMessage.ptt || undefined,
+      };
+    } catch (error) {
+      console.error("Error getting audio metadata:", error);
+      return null;
+    }
   }
 }
 
