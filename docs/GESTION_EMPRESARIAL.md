@@ -1,644 +1,1688 @@
-# Sistema de Gestión Empresarial - Flujos y Endpoints Completos
+# Sistema de Gestión Empresarial - Arquitectura Completa
 
-## 📋 Resumen Ejecutivo
+## 📋 Tabla de Contenidos
 
-Sistema completo de gestión empresarial para WhatsApp Multi-Sesiones con control granular de acceso, asignaciones de chats, monitoreo de empleados y gestión avanzada de permisos por roles.
+1. [Resumen Ejecutivo](#-resumen-ejecutivo)
+2. [Arquitectura de Roles](#-arquitectura-de-roles)
+3. [Controladores del Sistema](#-controladores-del-sistema)
+4. [Modelos de Datos](#-modelos-de-datos)
+5. [Sistema de Asignaciones](#-sistema-de-asignaciones)
+6. [Flujos de Trabajo](#-flujos-de-trabajo)
+7. [API Endpoints](#-api-endpoints)
+8. [Métricas y Reportes](#-métricas-y-reportes)
+9. [Seguridad](#-seguridad)
+10. [Casos de Uso](#-casos-de-uso)
 
-## 🎯 Jerarquía de Roles
+---
+
+## 🎯 Resumen Ejecutivo
+
+Sistema empresarial completo para WhatsApp Multi-Sesiones con control granular de acceso, asignaciones inteligentes de chats, monitoreo avanzado de empleados y gestión completa de permisos por roles jerárquicos.
+
+### Características Principales
+
+- **🏗 Arquitectura Multi-Rol**: Admin → Supervisor → Empleado → Guest
+- **📱 Gestión Multi-Sesión**: Múltiples números de WhatsApp simultáneos
+- **🎯 Asignaciones Inteligentes**: Control granular de acceso a chats específicos
+- **📊 Métricas Avanzadas**: Seguimiento de rendimiento y productividad
+- **🔐 Seguridad Robusta**: JWT, auditoría completa, permisos granulares
+- **📡 API RESTful**: Más de 50 endpoints documentados con Swagger
+- **💾 Base de Datos MongoDB**: Almacenamiento eficiente y escalable
+
+---
+
+## 🏗 Arquitectura de Roles
 
 ```
-👑 Admin (Control Total)
+👑 Administrador (Control Total)
    ↓
-🔧 Supervisor (Gestión de Empleados y Sesiones)
+🔧 Supervisor (Gestión de Equipos y Sesiones)
    ↓
 👤 Empleado (Gestión de Chats Asignados)
    ↓
-👥 Guest (Solo Consulta Básica)
+👥 Invitado (Consulta Limitada)
 ```
-
----
-
-## 🔐 Sistema de Permisos por Roles
 
 ### 👑 **Administrador (Admin)**
 **Permisos Totales:**
-- ✅ Crear, editar, eliminar usuarios de cualquier rol
-- ✅ Crear, editar, eliminar sesiones de WhatsApp
-- ✅ Ver todas las sesiones y métricas del sistema
-- ✅ Acceso completo a todos los chats y mensajes
-- ✅ Gestionar asignaciones de cualquier usuario
-- ✅ Resetear contraseñas de usuarios
-- ✅ Ver estadísticas completas del sistema
-- ✅ Configurar parámetros del sistema
+- ✅ Gestión completa de usuarios y roles
+- ✅ Control total de sesiones WhatsApp
+- ✅ Acceso a todas las conversaciones
+- ✅ Gestión de todas las asignaciones
+- ✅ Configuración del sistema
+- ✅ Auditoría completa
+- ✅ Métricas globales del sistema
 
 ### 🔧 **Supervisor**
 **Permisos de Gestión:**
-- ✅ Crear nuevas sesiones de WhatsApp (adicionales)
-- ✅ Ver sesiones creadas por él mismo
-- ✅ Asignar chats a empleados bajo su supervisión
-- ✅ Monitorear el progreso de empleados asignados
-- ✅ Ver métricas de sesiones que administra
-- ✅ Gestionar estados de chats asignados (completado, pendiente, rechazado)
-- ❌ No puede eliminar sesiones de otros supervisores
-- ❌ No puede gestionar usuarios de nivel superior
+- ✅ Crear sesiones adicionales de WhatsApp
+- ✅ Gestionar empleados bajo su supervisión
+- ✅ Asignar chats específicos a empleados
+- ✅ Monitorear progreso y métricas de empleados
+- ✅ Gestionar estados de asignaciones
+- ✅ Ver métricas de sesiones administradas
 
 ### 👤 **Empleado**
 **Permisos Específicos:**
-- ✅ Ver solo chats asignados por supervisores
-- ✅ Gestionar estados de sus chats asignados
-- ✅ Marcar chats como: completado, pendiente, rechazado
-- ✅ Ver historial de mensajes de chats asignados
+- ✅ Acceso solo a chats asignados
+- ✅ Gestionar estados de asignaciones propias
+- ✅ Ver historial de mensajes asignados
 - ✅ Acceder a multimedia de chats asignados
-- ❌ No puede ver chats de otros empleados
-- ❌ No puede crear sesiones nuevas
-- ❌ No puede asignar chats
+- ✅ Ver métricas personales de rendimiento
 
-### 👥 **Guest (Invitado)**
+### 👥 **Invitado (Guest)**
 **Permisos Limitados:**
 - ✅ Consulta básica de sesiones públicas
-- ❌ No puede gestionar nada
-- ❌ Solo lectura muy limitada
+- ❌ Sin permisos de gestión
 
 ---
 
-## 🏗 Arquitectura de Asignaciones
+## 🎮 Controladores del Sistema
 
-### Modelo de Asignaciones
+### 1. **authController.ts** - Autenticación y Autorización
+**Funciones principales:**
+- 🔐 `login()` - Autenticación de usuarios
+- 📝 `register()` - Registro de nuevos usuarios
+- 🔑 `forgotPassword()` - Recuperación de contraseña
+- 🔄 `resetPassword()` - Reseteo de contraseña con token
+- 🔒 `adminResetPassword()` - Admin resetea contraseña de usuario
+- 🔄 `changePassword()` - Usuario cambia su propia contraseña
 
+**Características:**
+- Sistema de tokens JWT con expiración
+- Recuperación segura de contraseñas vía email
+- Hashing bcrypt para contraseñas
+- Integración con servicio de email SMTP
+
+### 2. **userController.ts** - Gestión de Usuarios
+**Funciones principales:**
+- 👥 `listUsers()` - Listar usuarios con filtros
+- 👤 `getUser()` - Obtener usuario específico
+- ➕ `createUser()` - Crear nuevo usuario
+- ✏️ `updateUser()` - Actualizar información de usuario
+- 🗑️ `deleteUser()` - Eliminar usuario
+- 🔄 `changeUserRole()` - Cambiar rol de usuario
+- ✅ `activateUser()` / `deactivateUser()` - Activar/desactivar usuario
+
+**Características:**
+- Gestión completa del ciclo de vida de usuarios
+- Información empresarial (departamento, posición, supervisor)
+- Métricas de rendimiento automáticas
+- Configuración de notificaciones personalizada
+
+### 3. **roleController.ts** - Gestión de Roles
+**Funciones principales:**
+- 📋 `listRoles()` - Listar roles disponibles
+- 👤 `getRole()` - Obtener rol específico
+- ➕ `createRole()` - Crear nuevo rol
+- ✏️ `updateRole()` - Actualizar rol
+- 🗑️ `deleteRole()` - Eliminar rol
+
+**Características:**
+- Sistema de permisos basado en roles
+- Roles personalizables
+- Herencia de permisos
+
+### 4. **sessionController.ts** - Gestión de Sesiones WhatsApp
+**Funciones principales:**
+- 📱 `getSessions()` - Listar sesiones activas
+- ➕ `createSession()` - Crear nueva sesión WhatsApp
+- ❌ `disconnectSession()` - Desconectar sesión
+
+**Características:**
+- Gestión de múltiples sesiones simultáneas
+- Integración con servicio WhatsApp Web
+- Estado en tiempo real de conexiones
+
+### 5. **chatController.ts** - Gestión de Chats
+**Funciones principales:**
+- 💬 `getChatsBySession()` - Obtener chats de sesión
+
+**Características:**
+- Control de acceso basado en asignaciones
+- Filtrado por tipo (individual/grupo)
+- Paginación eficiente
+- ACL (Access Control List) integrado
+
+### 6. **messageController.ts** - Gestión de Mensajes
+**Funciones principales:**
+- 💬 `getMessagesByChat()` - Obtener mensajes de chat
+- ➕ `sendMessage()` - Enviar mensaje
+- 📎 `sendMediaMessage()` - Enviar mensaje con multimedia
+
+**Características:**
+- Historial completo de conversaciones
+- Soporte multimedia completo
+- Sistema de archivos MongoDB GridFS
+
+### 7. **assignmentController.ts** - Sistema de Asignaciones
+**Funciones principales:**
+- 🎯 `assignChat()` - Asignar chat a usuario
+- ❌ `unassignChat()` - Desasignar chat
+- 📋 `listAssignments()` - Listar asignaciones
+- 👤 `listUserAssignedChats()` - Chats asignados a usuario
+- 👤 `listMyAssignedChats()` - Mis chats asignados (empleado)
+
+**Características:**
+- Asignaciones granulares (chat específico a empleado específico)
+- Estados múltiples: active, completed, pending, rejected
+- Sistema de prioridades
+- Notas y comentarios
+
+### 8. **adminController.ts** - Panel Administrativo
+**Funciones principales:**
+- 📊 `getDashboard()` - Dashboard completo del sistema
+- 🏥 `getSystemHealth()` - Estado de salud del sistema
+- 👥 `getEmployeeMetrics()` - Métricas de empleados
+- 📈 `getAssignmentStats()` - Estadísticas de asignaciones
+- 📋 `getAuditLogs()` - Logs de auditoría
+- ⚙️ `getSecuritySettings()` - Configuración de seguridad
+
+**Características:**
+- Métricas en tiempo real
+- Análisis de rendimiento del sistema
+- Auditoría completa de acciones
+- Configuración de seguridad avanzada
+
+### 9. **employeeController.ts** - Panel de Empleados
+**Funciones principales:**
+- 👤 `getMyAssignments()` - Ver mis asignaciones
+- ✏️ `updateAssignmentStatus()` - Actualizar estado de asignación
+- 💬 `getMyChats()` - Ver chats asignados
+- 📊 `getAssignmentStats()` - Mis métricas personales
+
+**Características:**
+- Vista personalizada del empleado
+- Gestión autónoma de estados
+- Métricas personales de rendimiento
+
+---
+
+## 💾 Modelos de Datos
+
+### 1. **User (Usuario)**
 ```typescript
 {
   _id: ObjectId,
-  sessionId: "session_123",           // Sesión de WhatsApp
-  chatId: "1234567890@s.whatsapp.net", // Chat específico asignado
-  userId: "user_456",                 // Empleado asignado
-  assignedBy: "supervisor_789",        // Supervisor que asignó
+  name: string,
+  email: string,
+  passwordHash: string,
+  role: ObjectId (ref: Role),
+
+  // Información empresarial
+  department: string,
+  position: string,
+  supervisor: ObjectId (ref: User),
+
+  // Métricas de rendimiento
+  performance: {
+    overallScore: number,
+    currentStreak: number,
+    totalChatsHandled: number,
+    averageRating: number
+  },
+
+  // Configuración
+  notifications: {...},
+  limits: {...},
+  active: boolean,
+  createdAt: Date,
+  updatedAt: Date
+}
+```
+
+### 2. **Assignment (Asignación)**
+```typescript
+{
+  _id: ObjectId,
+  sessionId: string,
+  chatId: string,
+  user: ObjectId (ref: User),
+  assignedBy: ObjectId (ref: User),
+
+  // Estado y prioridad
   status: "active" | "completed" | "pending" | "rejected",
   priority: "low" | "medium" | "high",
-  notes: "Comentarios del supervisor",
+
+  // Timestamps
   assignedAt: Date,
   completedAt?: Date,
-  metadata: {
-    chatName: "Cliente Importante",
-    messageCount: 25,
-    lastActivity: Date
+  unassignedAt?: Date,
+
+  // Metadatos y métricas
+  metadata: {...},
+  metrics: {...},
+  active: boolean
+}
+```
+
+### 3. **AssignmentMetrics (Métricas de Asignación)**
+```typescript
+{
+  _id: ObjectId,
+  userId: ObjectId (ref: User),
+  sessionId: string,
+
+  // Período de métricas
+  period: {
+    startDate: Date,
+    endDate: Date
+  },
+
+  // Métricas principales
+  totalAssigned: number,
+  totalCompleted: number,
+  averageResolutionTime: number,
+  completionRate: number,
+
+  // Métricas por prioridad
+  byPriority: {
+    high: {...},
+    medium: {...},
+    low: {...}
+  }
+}
+```
+
+### 4. **Session (Sesión WhatsApp)**
+```typescript
+{
+  _id: ObjectId,
+  sessionId: string,
+  name: string,
+  phone: string,
+  isConnected: boolean,
+  isActive: boolean,
+  createdAt: Date,
+  updatedAt: Date
+}
+```
+
+### 5. **Chat (Chat WhatsApp)**
+```typescript
+{
+  _id: ObjectId,
+  sessionId: string,
+  chatId: string,
+  name: string,
+  isGroup: boolean,
+  unreadCount: number,
+  lastMessage: string,
+  lastMessageTime: Date,
+  createdAt: Date
+}
+```
+
+### 6. **Message (Mensaje)**
+```typescript
+{
+  _id: ObjectId,
+  sessionId: string,
+  chatId: string,
+  messageId: string,
+  type: "text" | "image" | "video" | "audio" | "document",
+  content: string,
+  fromMe: boolean,
+  timestamp: Date,
+
+  // Para multimedia
+  media?: {
+    filename: string,
+    mimetype: string,
+    size: number,
+    url: string
   }
 }
 ```
 
 ---
 
-## 📡 Endpoints del Sistema de Asignaciones
+## 🎯 Sistema de Asignaciones
 
-### Para Supervisores
+### Funcionamiento del Sistema
 
-#### 1. Crear Sesión Nueva (Solo Supervisores)
-```http
-POST /api/sessions
-Authorization: Bearer <token_supervisor>
-
-{
-  "name": "Sesión Ventas Internacionales",
-  "description": "WhatsApp para clientes extranjeros"
-}
-```
-
-#### 2. Asignar Chat a Empleado
-```http
-POST /api/sessions/:sessionId/assignments
-Authorization: Bearer <token_supervisor>
-
-{
-  "chatId": "1234567890@s.whatsapp.net",
-  "userId": "empleado_123",
-  "priority": "high",
-  "notes": "Cliente VIP - requiere atención inmediata"
-}
-```
-
-#### 3. Ver Asignaciones de Empleados Bajo Supervisión
-```http
-GET /api/sessions/:sessionId/assignments?userId=empleado_123
-Authorization: Bearer <token_supervisor>
-
-Response:
-{
-  "success": true,
-  "data": [
-    {
-      "_id": "assignment_123",
-      "sessionId": "session_123",
-      "chatId": "1234567890@s.whatsapp.net",
-      "userId": "empleado_123",
-      "assignedBy": "supervisor_789",
-      "status": "active",
-      "priority": "high",
-      "notes": "Cliente VIP",
-      "assignedAt": "2025-01-15T10:30:00Z",
-      "metadata": {
-        "chatName": "María González",
-        "messageCount": 15,
-        "lastActivity": "2025-01-15T14:20:00Z"
-      }
-    }
-  ]
-}
-```
-
-#### 4. Monitorear Progreso de Empleado
-```http
-GET /api/sessions/:sessionId/assignments/stats?userId=empleado_123
-Authorization: Bearer <token_supervisor>
-
-Response:
-{
-  "success": true,
-  "data": {
-    "totalAssigned": 25,
-    "completed": 18,
-    "pending": 5,
-    "rejected": 2,
-    "avgResolutionTime": "2.5 horas",
-    "performance": "94%"
-  }
-}
-```
-
-### Para Empleados
-
-#### 1. Ver Chats Asignados
-```http
-GET /api/sessions/:sessionId/chats?assigned=true
-Authorization: Bearer <token_empleado>
-
-Response:
-{
-  "success": true,
-  "data": [
-    {
-      "chatId": "1234567890@s.whatsapp.net",
-      "name": "María González",
-      "phone": "1234567890",
-      "lastMessage": "¿Podría confirmar el pedido?",
-      "lastMessageTime": "2025-01-15T14:20:00Z",
-      "unreadCount": 2,
-      "assignment": {
-        "status": "active",
-        "priority": "high",
-        "assignedAt": "2025-01-15T10:30:00Z",
-        "notes": "Cliente VIP - requiere atención inmediata"
-      }
-    }
-  ]
-}
-```
-
-#### 2. Actualizar Estado de Chat Asignado
-```http
-PUT /api/sessions/:sessionId/assignments/:assignmentId/status
-Authorization: Bearer <token_empleado>
-
-{
-  "status": "completed",
-  "notes": "Cliente confirmó pedido - total $1,250"
-}
-```
-
-**Estados disponibles para empleados:**
-- `completed` - Trabajo terminado exitosamente
-- `pending` - Necesita más tiempo/análisis
-- `rejected` - No se pudo completar (razones en notes)
-
-#### 3. Ver Mensajes Solo de Chats Asignados
-```http
-GET /api/sessions/:sessionId/messages?chatId=1234567890@s.whatsapp.net
-Authorization: Bearer <token_empleado>
-```
-
-### Para Administradores
-
-#### 1. Vista Completa del Sistema
-```http
-GET /api/admin/dashboard
-Authorization: Bearer <token_admin>
-
-Response:
-{
-  "success": true,
-  "data": {
-    "totalSessions": 8,
-    "activeSessions": 6,
-    "totalUsers": 25,
-    "totalAssignments": 45,
-    "systemHealth": "excellent",
-    "recentActivity": [...],
-    "performanceMetrics": {...}
-  }
-}
-```
-
-#### 2. Gestionar Todas las Asignaciones
-```http
-GET /api/sessions/:sessionId/assignments?status=pending&page=1&limit=20
-Authorization: Bearer <token_admin>
-```
-
-#### 3. Resetear Contraseña de Usuario
-```http
-POST /api/admin/users/:userId/reset-password
-Authorization: Bearer <token_admin>
-
-{
-  "temporaryPassword": "TempPass123!",
-  "notifyUser": true
-}
-```
-
----
-
-## 🔄 Flujos de Trabajo Completos
-
-### Flujo 1: Supervisor Crea Nueva Sesión
-
-```
-1. Supervisor → POST /api/sessions
-   - Crea nueva sesión WhatsApp
-   - Sistema genera código QR
-   - Supervisor escanea con WhatsApp
-
-2. Sistema:
-   - Crea sesión en MongoDB
-   - Asocia sesión al supervisor creador
-   - Emite evento Socket.IO: "new_session"
-
-3. Supervisor puede:
-   - Ver solo sesiones creadas por él
-   - Asignar chats de estas sesiones
-   - Monitorear empleados asignados
-```
-
-### Flujo 2: Asignación de Chat a Empleado
-
-```
-1. Supervisor → POST /api/sessions/:sessionId/assignments
-   - Selecciona chat específico
+1. **Creación de Asignación**:
+   - Supervisor selecciona chat específico
    - Asigna a empleado disponible
-   - Agrega prioridad y notas
+   - Establece prioridad y notas
 
-2. Sistema:
-   - Crea registro en tabla "assignments"
-   - Relaciona: sesión → chat → empleado → supervisor
-   - Envía notificación al empleado
+2. **Control de Acceso**:
+   - Empleados ven SOLO chats asignados
+   - Middleware verifica permisos automáticamente
+   - Sistema bloquea acceso no autorizado
 
-3. Empleado recibe:
-   - Notificación de nuevo chat asignado
-   - Acceso solo a ese chat específico
-   - Puede gestionar estados del chat
-```
+3. **Gestión de Estados**:
+   - Empleado actualiza progreso
+   - Sistema calcula métricas automáticamente
+   - Supervisor monitorea avances
 
-### Flujo 3: Empleado Gestiona Chat Asignado
+### Estados de Asignación
 
-```
-1. Empleado → GET /api/sessions/:sessionId/chats?assigned=true
-   - Ve solo chats asignados a él
-   - Información completa del chat
+| Estado | Descripción | Acción del Empleado |
+|--------|-------------|-------------------|
+| `active` | Asignación activa | Trabajando en el chat |
+| `completed` | Trabajo terminado | Caso cerrado exitosamente |
+| `pending` | Necesita más tiempo | Requiere análisis adicional |
+| `rejected` | No se pudo completar | Razones en notas |
 
-2. Empleado trabaja con el chat:
-   - Lee mensajes históricos
-   - Responde mensajes
-   - Gestiona negociación/conversación
+---
 
-3. Empleado actualiza estado:
-   - PUT /api/sessions/:sessionId/assignments/:id/status
-   - Estados: completed, pending, rejected
-   - Agrega notas de cierre
-```
+## 🔄 Flujos de Trabajo
 
-### Flujo 4: Supervisor Monitorea Empleados
+### Flujo Completo: Supervisor → Empleado
 
 ```
-1. Supervisor → GET /api/sessions/:sessionId/assignments/stats?userId=X
-   - Ve métricas de empleado específico
-   - Total asignados, completados, pendientes
-
-2. Supervisor puede:
-   - Reasignar chats si empleado no responde
-   - Ver detalles de conversaciones
-   - Evaluar rendimiento del empleado
-
-3. Sistema proporciona:
-   - Tiempo promedio de resolución
-   - Tasa de éxito/completitud
-   - Métricas de productividad
+1. Supervisor crea sesión WhatsApp
+   ↓
+2. Sistema genera código QR para escanear
+   ↓
+3. Supervisor asigna chat específico a empleado
+   ↓
+4. Empleado recibe notificación de asignación
+   ↓
+5. Empleado accede SOLO al chat asignado
+   ↓
+6. Empleado gestiona conversación y actualiza estados
+   ↓
+7. Sistema calcula métricas automáticamente
+   ↓
+8. Supervisor monitorea progreso y métricas
 ```
 
-### Flujo 5: Control Administrativo Total
+### Control de Seguridad
 
+- **JWT Authentication**: Todos los endpoints requieren token válido
+- **Role-based Access Control**: Permisos según jerarquía de roles
+- **Assignment-based Filtering**: Empleados ven solo chats asignados
+- **Audit Logging**: Todas las acciones quedan registradas
+- **Input Validation**: Sanitización y validación de datos
+
+---
+
+## 📡 API Endpoints
+
+### Autenticación (`/api/auth`)
 ```
-1. Admin → GET /api/admin/dashboard
-   - Vista completa del sistema
-   - Todas las sesiones, usuarios, asignaciones
+POST /login              - Iniciar sesión
+POST /register           - Registrar usuario
+POST /forgot-password    - Solicitar reseteo de contraseña
+POST /reset-password     - Resetear contraseña con token
+PUT  /change-password    - Cambiar contraseña propia
+POST /admin-reset-password - Admin resetea contraseña
+```
 
-2. Admin puede:
-   - Crear usuarios de cualquier rol
-   - Gestionar todas las sesiones
-   - Ver métricas globales
-   - Resetear contraseñas
-   - Configurar permisos del sistema
+### Gestión de Usuarios (`/api/users`, `/api/admin/users`)
+```
+GET    /users            - Listar usuarios
+GET    /users/:id        - Obtener usuario específico
+POST   /users            - Crear usuario
+PUT    /users/:id        - Actualizar usuario
+DELETE /users/:id        - Eliminar usuario
+PATCH  /users/:id/role   - Cambiar rol
+POST   /users/:id/activate   - Activar usuario
+POST   /users/:id/deactivate - Desactivar usuario
+```
 
-3. Sistema permite:
-   - Auditoría completa de acciones
-   - Reportes detallados de uso
-   - Gestión centralizada de recursos
+### Sesiones WhatsApp (`/api/sessions`)
+```
+GET  /sessions           - Listar sesiones
+POST /sessions           - Crear sesión
+DELETE /sessions/:id     - Desconectar sesión
+```
+
+### Chats y Mensajes (`/api/sessions/:sessionId`)
+```
+GET  /chats              - Listar chats (filtrado por asignaciones)
+GET  /chats/:chatId/messages - Obtener mensajes del chat
+POST /chats/:chatId/messages - Enviar mensaje
+```
+
+### Asignaciones (`/api/sessions/:sessionId/assignments`)
+```
+POST   /assignments      - Asignar chat a empleado
+DELETE /assignments/:id  - Desasignar chat
+GET    /assignments      - Listar asignaciones
+GET    /assignments/me   - Mis asignaciones (empleado)
+PUT    /assignments/:id/status - Actualizar estado
+```
+
+### Panel Administrativo (`/api/admin`)
+```
+GET  /dashboard          - Dashboard completo
+GET  /employee-metrics   - Métricas de empleados
+GET  /assignment-stats   - Estadísticas de asignaciones
+GET  /system/health      - Estado de salud del sistema
+GET  /audit-logs         - Logs de auditoría
+GET  /security-settings  - Configuración de seguridad
+PUT  /security-settings  - Actualizar configuración
+```
+
+### Panel de Empleados (`/api/employee`)
+```
+GET  /assignments        - Ver mis asignaciones
+PUT  /assignments/:id/status - Actualizar estado de asignación
+GET  /chats              - Ver chats asignados
+GET  /assignments/stats  - Mis métricas personales
 ```
 
 ---
 
 ## 📊 Métricas y Reportes
 
-### Métricas por Empleado
+### Métricas de Empleado
 ```javascript
 {
   empleadoId: "user_123",
-  periodo: "2025-01-01 to 2025-01-31",
+  periodo: "2025-01-01 a 2025-01-31",
   metricas: {
     chatsAsignados: 45,
     chatsCompletados: 38,
-    chatsPendientes: 5,
-    chatsRechazados: 2,
     tiempoPromedioResolucion: "2.3 horas",
     satisfaccionClientes: "4.8/5",
-    productividad: "94%"
+    productividad: "94%",
+    porPrioridad: {
+      alta: { asignados: 12, completados: 11, tiempo: "1.8h" },
+      media: { asignados: 20, completados: 18, tiempo: "2.1h" },
+      baja: { asignados: 13, completados: 9, tiempo: "3.2h" }
+    }
   }
 }
 ```
 
-### Métricas por Supervisor
+### Dashboard Administrativo
 ```javascript
 {
-  supervisorId: "supervisor_456",
-  sesionesAdministradas: 3,
-  empleadosSupervisados: 8,
-  metricasGlobales: {
-    totalChatsProcesados: 180,
-    tiempoPromedioEquipo: "2.1 horas",
-    indiceSatisfaccion: "4.7/5",
-    productividadEquipo: "92%"
-  }
+  totalSesiones: 8,
+  sesionesActivas: 6,
+  totalUsuarios: 25,
+  usuariosActivos: 22,
+  totalAsignaciones: 180,
+  asignacionesActivas: 45,
+  completadasHoy: 23,
+  sistemaSalud: "excellent",
+  empleadosDestacados: [...],
+  sesionesProblematicas: [...],
+  actividadReciente: [...]
 }
 ```
 
 ---
 
-## 🔐 Seguridad y Control de Acceso
+## 🔐 Seguridad
 
 ### Middleware de Seguridad
 
-#### 1. Verificación de JWT
+#### 1. Autenticación JWT
 ```typescript
-// Todos los endpoints requieren autenticación
+// Verificación automática en todos los endpoints
 router.use(verifyJWT);
 ```
 
 #### 2. Control de Roles
 ```typescript
-// Solo admins pueden acceder
-router.get("/admin/*", verifyRole(["admin"]));
+// Solo administradores pueden acceder
+router.use(requireRoles("administrator"));
 
-// Supervisores y admins
-router.post("/sessions", verifyRole(["admin", "supervisor"]));
-
-// Empleados pueden ver solo sus asignaciones
-router.get("/chats", verifyChatAssignment);
+// Supervisores y administradores
+router.use(requireRoles("administrator", "supervisor"));
 ```
 
-#### 3. Verificación de Asignaciones
+#### 3. Control de Asignaciones
 ```typescript
-// Middleware personalizado para chats
-const verifyChatAssignment = async (req: Request, res: Response, next: NextFunction) => {
-  const user = (req as any).user;
-  const { sessionId, chatId } = req.query;
-
-  if (user.role === "admin") return next(); // Admin ve todo
-
-  const assignment = await Assignment.findOne({
-    sessionId,
-    chatId,
-    userId: user.sub,
-    status: "active"
-  });
-
-  if (!assignment) {
-    return res.status(403).json({
-      success: false,
-      error: "No tienes acceso a este chat"
-    });
-  }
-
-  next();
-};
+// Empleados ven solo chats asignados
+const assigned = await Assignment.find({
+  sessionId, user: authUser.sub, active: true
+});
 ```
+
+### Auditoría Completa
+- ✅ Todas las acciones quedan registradas
+- ✅ Información de usuario, timestamp, IP
+- ✅ Logs de errores y acciones exitosas
+- ✅ Configuración de retención de logs
 
 ---
 
-## 🎯 Casos de Uso Específicos
+## 🎯 Casos de Uso
 
-### Caso 1: Empresa de Ventas con WhatsApp
-
+### Caso 1: Empresa de Ventas Internacionales
 **Escenario:**
-- Empresa maneja múltiples números de WhatsApp para diferentes regiones
-- Supervisores asignan clientes a vendedores específicos
-- Vendedores gestionan conversaciones asignadas
-- Supervisores monitorean cierre de ventas
+- Empresa maneja WhatsApp para diferentes regiones
+- Supervisores asignan clientes VIP a vendedores expertos
+- Sistema trackea cierre de ventas y métricas
 
 **Flujo:**
-1. Admin crea usuarios: 2 supervisores, 5 empleados
-2. Supervisor crea 3 sesiones (Ventas España, Ventas Latinoamérica, Ventas USA)
-3. Supervisor asigna chats de clientes a empleados según especialidad
-4. Empleados gestionan conversaciones y marcan como completadas/ventas cerradas
-5. Supervisores ven métricas de ventas y rendimiento de empleados
+1. Admin configura 3 supervisores (España, Latinoamérica, USA)
+2. Cada supervisor crea sesiones por región
+3. Supervisores asignan clientes a empleados especializados
+4. Empleados gestionan conversaciones y marcan ventas cerradas
+5. Sistema calcula métricas de ventas y rendimiento por región
 
-### Caso 2: Centro de Atención al Cliente
-
+### Caso 2: Centro de Soporte Técnico
 **Escenario:**
-- Centro de soporte técnico con múltiples líneas
-- Supervisores distribuyen consultas entre técnicos
-- Técnicos resuelven problemas asignados
-- Sistema trackea tiempos de resolución y satisfacción
+- Centro maneja múltiples líneas de soporte técnico
+- Consultas se asignan según especialidad técnica
+- Sistema mide tiempos de resolución y satisfacción
 
 **Flujo:**
-1. Sistema recibe consultas por WhatsApp
-2. Supervisor clasifica y asigna según especialidad técnica
-3. Técnico recibe asignación y resuelve consulta
-4. Técnico marca como completado con notas técnicas
-5. Supervisor evalúa calidad de resolución y tiempos
+1. Sistema recibe consultas técnicas por WhatsApp
+2. Supervisor clasifica por especialidad (hardware/software/redes)
+3. Asigna a técnico especializado disponible
+4. Técnico resuelve consulta y documenta solución
+5. Sistema calcula métricas de resolución y satisfacción
 
 ### Caso 3: Agencia de Marketing Digital
-
 **Escenario:**
 - Agencia maneja campañas para múltiples clientes
-- Supervisores coordinan equipos de community managers
-- Cada community manager maneja clientes específicos
+- Community managers especializados por industria
 - Sistema trackea engagement y respuesta a campañas
 
----
-
-## 🚀 Endpoints Específicos por Caso de Uso
-
-### Para Empresa de Ventas
-```http
-# Crear sesión por región
-POST /api/sessions {"name": "Ventas España"}
-
-# Asignar cliente VIP a mejor vendedor
-POST /api/sessions/:sessionId/assignments {
-  "chatId": "cliente_vip@s.whatsapp.net",
-  "userId": "mejor_vendedor_id",
-  "priority": "high",
-  "notes": "Cliente con presupuesto > $10K"
-}
-
-# Vendedor actualiza estado de venta
-PUT /api/sessions/:sessionId/assignments/:id/status {
-  "status": "completed",
-  "notes": "Venta cerrada - $12,500 + servicios"
-}
-
-# Supervisor ve métricas de vendedor
-GET /api/sessions/:sessionId/assignments/stats?userId=vendedor_id
-```
-
-### Para Centro de Soporte
-```http
-# Asignar consulta técnica
-POST /api/sessions/:sessionId/assignments {
-  "chatId": "usuario_problema@s.whatsapp.net",
-  "userId": "tecnico_especialista_id",
-  "priority": "medium",
-  "notes": "Problema de configuración de software"
-}
-
-# Técnico documenta solución
-PUT /api/sessions/:sessionId/assignments/:id/status {
-  "status": "completed",
-  "notes": "Resuelto: Actualizar drivers versión 2.1.4"
-}
-
-# Métricas de resolución técnica
-GET /api/sessions/:sessionId/assignments?status=completed&dateRange=2025-01-01,2025-01-31
-```
+**Flujo:**
+1. Admin configura equipos por industria (tecnología, salud, finanzas)
+2. Supervisores asignan campañas específicas a especialistas
+3. Community managers gestionan conversaciones de clientes
+4. Sistema mide engagement y calidad de respuestas
+5. Supervisores evalúan efectividad de campañas
 
 ---
 
-## 📈 Métricas Avanzadas
+## 🚀 Funcionalidades Avanzadas
 
-### Dashboard de Supervisor
-```javascript
+### Sistema de Notificaciones
+- 📧 **Email SMTP**: Notificaciones automáticas
+- 📱 **Push Notifications**: Para aplicaciones móviles
+- 💬 **Notificaciones internas**: Dentro de la plataforma
+- 📊 **Reportes automáticos**: Métricas periódicas
+
+### Métricas Avanzadas
+- 📈 **Tiempo de respuesta**: Desde asignación hasta primera respuesta
+- ⏱️ **Tiempo de resolución**: Desde asignación hasta completitud
+- 📊 **Tasa de completitud**: Porcentaje de casos exitosos
+- ⭐ **Satisfacción del cliente**: Rating de calidad de servicio
+- 🎯 **Productividad por prioridad**: Rendimiento según nivel de prioridad
+
+### Configuración Empresarial
+- 🏢 **Límites por empleado**: Máximo de chats concurrentes
+- ⏰ **Horarios de trabajo**: Configuración de disponibilidad
+- 📧 **Preferencias de notificación**: Email, SMS, push
+- 🔒 **Configuración de seguridad**: Políticas de contraseñas, 2FA
+
+---
+
+## 📋 Próximas Funcionalidades
+
+### Planificadas para Próximas Versiones
+- [ ] **Sistema de colas inteligente** para asignación automática
+- [ ] **Machine Learning** para predicción de tiempos de resolución
+- [ ] **Integración con CRM externos** (HubSpot, Salesforce)
+- [ ] **Sistema de tickets avanzado** con prioridades automáticas
+- [ ] **Aplicación móvil nativa** para empleados
+- [ ] **Webhooks** para integraciones externas
+- [ ] **Sistema de encuestas automáticas** de satisfacción
+- [ ] **Gamificación** con badges y logros para empleados
+
+---
+
+## 📊 Modelos de Respuesta (Response Models)
+
+A continuación se detallan los modelos de respuesta completos para todos los endpoints del sistema.
+
+### 🔐 **Autenticación (`/api/auth`)**
+
+#### **POST /login**
+```typescript
+// Request Body
 {
-  sesionesActivas: 3,
-  empleadosActivos: 8,
-  asignacionesPendientes: 12,
-  completadasHoy: 25,
-  tiempoPromedioResolucion: "2.1 horas",
-  productividadEquipo: "94%",
-  metricasPorEmpleado: [
+  "email": "string",
+  "password": "string"
+}
+
+// Response 200
+{
+  "success": true,
+  "data": {
+    "token": "string (JWT)",
+    "user": {
+      "id": "string",
+      "name": "string",
+      "email": "string",
+      "role": "string"
+    }
+  }
+}
+
+// Response 401
+{
+  "success": false,
+  "error": "Credenciales inválidas"
+}
+```
+
+#### **POST /register**
+```typescript
+// Request Body
+{
+  "name": "string",
+  "email": "string",
+  "password": "string",
+  "roleName": "string" // opcional, default: "guest"
+}
+
+// Response 201
+{
+  "success": true,
+  "data": {
+    "id": "string",
+    "name": "string",
+    "email": "string",
+    "role": "string"
+  }
+}
+
+// Response 409
+{
+  "success": false,
+  "error": "Email ya registrado"
+}
+```
+
+#### **POST /forgot-password**
+```typescript
+// Request Body
+{
+  "email": "string"
+}
+
+// Response 200
+{
+  "success": true,
+  "message": "Si el email existe, recibirás instrucciones para resetear tu contraseña",
+  "resetToken": "string" // Solo en desarrollo
+}
+```
+
+#### **POST /reset-password**
+```typescript
+// Request Body
+{
+  "token": "string",
+  "newPassword": "string"
+}
+
+// Response 200
+{
+  "success": true,
+  "message": "Contraseña actualizada correctamente"
+}
+
+// Response 400
+{
+  "success": false,
+  "error": "Token inválido o expirado"
+}
+```
+
+#### **POST /change-password**
+```typescript
+// Request Body
+{
+  "currentPassword": "string",
+  "newPassword": "string"
+}
+
+// Response 200
+{
+  "success": true,
+  "message": "Contraseña actualizada correctamente"
+}
+
+// Response 401
+{
+  "success": false,
+  "error": "Contraseña actual incorrecta"
+}
+```
+
+#### **POST /admin/reset-password/:userId**
+```typescript
+// Request Body
+{
+  "defaultPassword": "string" // opcional, default: "TempPassword123!"
+}
+
+// Response 200
+{
+  "success": true,
+  "message": "Contraseña reseteada correctamente",
+  "data": {
+    "userId": "string",
+    "email": "string",
+    "defaultPassword": "string"
+  }
+}
+```
+
+---
+
+### 👥 **Usuarios (`/api/users`)**
+
+#### **GET /users**
+```typescript
+// Query Parameters
+?page=1&limit=20&active=true
+
+// Response 200
+{
+  "success": true,
+  "data": [
     {
-      empleadoId: "emp_1",
-      chatsActivos: 5,
-      completados: 8,
-      tiempoPromedio: "1.8 horas",
-      satisfaccion: "4.9/5"
+      "_id": "string",
+      "name": "string",
+      "email": "string",
+      "role": {
+        "_id": "string",
+        "name": "string",
+        "active": "boolean"
+      },
+      "department": "string",
+      "position": "string",
+      "supervisor": "ObjectId",
+      "performance": {
+        "overallScore": "number",
+        "currentStreak": "number",
+        "totalChatsHandled": "number",
+        "averageRating": "number"
+      },
+      "active": "boolean",
+      "createdAt": "Date",
+      "updatedAt": "Date"
+    }
+  ],
+  "meta": {
+    "page": "number",
+    "limit": "number",
+    "total": "number",
+    "totalPages": "number"
+  }
+}
+```
+
+#### **GET /users/:id**
+```typescript
+// Response 200
+{
+  "success": true,
+  "data": {
+    "_id": "string",
+    "name": "string",
+    "email": "string",
+    "role": {
+      "_id": "string",
+      "name": "string"
+    },
+    "department": "string",
+    "position": "string",
+    "supervisor": {
+      "_id": "string",
+      "name": "string"
+    },
+    "performance": {
+      "overallScore": "number",
+      "currentStreak": "number",
+      "totalChatsHandled": "number",
+      "averageRating": "number"
+    },
+    "active": "boolean",
+    "createdAt": "Date",
+    "updatedAt": "Date"
+  }
+}
+```
+
+#### **POST /users**
+```typescript
+// Request Body
+{
+  "name": "string",
+  "email": "string",
+  "password": "string",
+  "roleName": "string"
+}
+
+// Response 201
+{
+  "success": true,
+  "data": {
+    "id": "string",
+    "name": "string",
+    "email": "string",
+    "role": "string"
+  }
+}
+```
+
+---
+
+### 📱 **Sesiones (`/api/sessions`)**
+
+#### **GET /sessions**
+```typescript
+// Response 200
+{
+  "success": true,
+  "data": [
+    {
+      "_id": "string",
+      "sessionId": "string",
+      "name": "string",
+      "phone": "string",
+      "isConnected": "boolean",
+      "isActive": "boolean",
+      "lastActivity": "Date",
+      "createdAt": "Date",
+      "updatedAt": "Date"
     }
   ]
 }
 ```
 
-### Reportes de Rendimiento
-```javascript
-// Generar reporte mensual
-GET /api/admin/reports?type=monthly&date=2025-01
+#### **POST /sessions**
+```typescript
+// Request Body
+{
+  "sessionId": "string",
+  "name": "string",
+  "phone": "string"
+}
 
-Response: {
-  totalSesiones: 12,
-  totalUsuarios: 45,
-  totalAsignaciones: 320,
-  promedioCompletitud: "91%",
-  tiempoPromedioResolucion: "2.3 horas",
-  topEmpleados: [...],
-  areasMejora: [...]
+// Response 200
+{
+  "success": true,
+  "message": "Sesión iniciada"
 }
 ```
 
 ---
 
-## 🔧 Configuración del Sistema
+### 💬 **Chats (`/api/sessions/:sessionId/chats`)**
 
-### Variables de Entorno para Empresas
-```bash
-# Configuración empresarial
-MAX_SESIONES_POR_SUPERVISOR=5
-MAX_ASIGNACIONES_POR_EMPLEADO=20
-TIEMPO_MAXIMO_INACTIVIDAD=30  # minutos
-AUTO_ASIGNACION_INTELLIGENTE=true
+#### **GET /chats**
+```typescript
+// Query Parameters
+?page=1&limit=20&type=all
 
-# Notificaciones
-NOTIFICAR_ASIGNACIONES=true
-NOTIFICAR_COMPLETITUD=true
-NOTIFICAR_INACTIVIDAD=true
-
-# Métricas
-TRACK_TIEMPOS_RESOLUCION=true
-TRACK_SATISFACCION_CLIENTE=true
-GENERAR_REPORTES_AUTOMATICOS=true
+// Response 200
+{
+  "success": true,
+  "data": [
+    {
+      "_id": "string",
+      "sessionId": "string",
+      "chatId": "string",
+      "name": "string",
+      "isGroup": "boolean",
+      "unreadCount": "number",
+      "lastMessage": "string",
+      "lastMessageTime": "Date",
+      "createdAt": "Date"
+    }
+  ],
+  "meta": {
+    "page": "number",
+    "limit": "number",
+    "total": "number",
+    "totalPages": "number"
+  }
+}
 ```
 
 ---
 
-## 🎯 Beneficios del Sistema
+### 📨 **Mensajes (`/api/sessions/:sessionId/messages`)**
 
-### Para Administradores
-- ✅ **Control total** del sistema y usuarios
-- ✅ **Visibilidad completa** de operaciones
-- ✅ **Métricas globales** para toma de decisiones
-- ✅ **Gestión centralizada** de recursos
+#### **GET /chats/:chatId/messages**
+```typescript
+// Query Parameters
+?page=1&limit=50
 
-### Para Supervisores
-- ✅ **Gestión eficiente** de equipos de trabajo
-- ✅ **Monitoreo en tiempo real** del progreso
-- ✅ **Métricas detalladas** de rendimiento individual
-- ✅ **Flexibilidad** para crear sesiones adicionales
+// Response 200
+{
+  "success": true,
+  "data": [
+    {
+      "_id": "string",
+      "sessionId": "string",
+      "chatId": "string",
+      "messageId": "string",
+      "type": "text|image|video|audio|document",
+      "content": "string",
+      "fromMe": "boolean",
+      "timestamp": "Date",
+      "media": {
+        "filename": "string",
+        "mimetype": "string",
+        "size": "number",
+        "url": "string"
+      }
+    }
+  ],
+  "meta": {
+    "page": "number",
+    "limit": "number",
+    "total": "number",
+    "totalPages": "number"
+  }
+}
+```
 
-### Para Empleados
-- ✅ **Enfoque específico** en chats asignados
-- ✅ **Claridad de responsabilidades** y prioridades
-- ✅ **Feedback directo** de supervisores
-- ✅ **Autogestión** de estados de trabajo
+#### **POST /messages**
+```typescript
+// Request Body
+{
+  "to": "string (chatId)",
+  "text": "string"
+}
 
-### Para la Empresa
-- ✅ **Productividad mejorada** con asignaciones específicas
-- ✅ **Seguimiento preciso** de operaciones y resultados
-- ✅ **Escalabilidad** para múltiples equipos y regiones
-- ✅ **ROI medible** con métricas detalladas de rendimiento
+// Response 200
+{
+  "success": true,
+  "message": "Mensaje enviado exitosamente"
+}
+```
 
 ---
 
-## 🚀 Próximas Funcionalidades
+### 🎯 **Asignaciones (`/api/sessions/:sessionId/assignments`)**
 
-### Planificadas
-- [ ] **Sistema de colas** para asignación automática
-- [ ] **Machine Learning** para predicción de tiempos de resolución
-- [ ] **Integración con CRM** externos
-- [ ] **Sistema de tickets** avanzado
-- [ ] **API de reportes** para herramientas de BI
-- [ ] **Aplicación móvil** para empleados
-- [ ] **Sistema de encuestas** de satisfacción automática
-- [ ] **Webhooks** para notificaciones externas
+#### **POST /assignments**
+```typescript
+// Request Body
+{
+  "chatId": "string",
+  "userId": "string",
+  "priority": "high|medium|low",
+  "notes": "string"
+}
 
-### En Desarrollo
-- [ ] **Chat interno** entre supervisor y empleado
-- [ ] **Sistema de badges/logros** para empleados
-- [ ] **Gamificación** del rendimiento
-- [ ] **Análisis predictivo** de carga de trabajo
+// Response 201
+{
+  "success": true,
+  "data": {
+    "_id": "string",
+    "sessionId": "string",
+    "chatId": "string",
+    "user": "ObjectId",
+    "assignedBy": "ObjectId",
+    "status": "active",
+    "priority": "string",
+    "notes": "string",
+    "assignedAt": "Date"
+  }
+}
+```
+
+#### **GET /assignments**
+```typescript
+// Query Parameters
+?chatId=string&userId=string&active=true
+
+// Response 200
+{
+  "success": true,
+  "data": [
+    {
+      "_id": "string",
+      "sessionId": "string",
+      "chatId": "string",
+      "user": {
+        "_id": "string",
+        "name": "string",
+        "email": "string"
+      },
+      "assignedBy": {
+        "_id": "string",
+        "name": "string"
+      },
+      "status": "active|completed|pending|rejected",
+      "priority": "high|medium|low",
+      "notes": "string",
+      "assignedAt": "Date",
+      "completedAt": "Date",
+      "metadata": {
+        "chatName": "string",
+        "messageCount": "number",
+        "lastActivity": "Date"
+      },
+      "metrics": {
+        "messagesExchanged": "number",
+        "resolutionTime": "number",
+        "satisfaction": "number"
+      }
+    }
+  ]
+}
+```
 
 ---
 
-Este sistema proporciona una solución empresarial completa para gestión de comunicaciones WhatsApp con control granular, asignaciones inteligentes y monitoreo avanzado de rendimiento.
+### 👑 **Panel Administrativo (`/api/admin`)**
+
+#### **GET /dashboard**
+```typescript
+// Response 200
+{
+  "success": true,
+  "data": {
+    "overview": {
+      "totalSessions": "number",
+      "activeSessions": "number",
+      "totalUsers": "number",
+      "activeUsers": "number",
+      "totalChats": "number",
+      "totalMessages": "number",
+      "totalAssignments": "number",
+      "activeAssignments": "number",
+      "completedAssignments": "number",
+      "pendingAssignments": "number"
+    },
+    "systemHealth": {
+      "status": "excellent|warning|critical",
+      "sessions": {
+        "total": "number",
+        "connected": "number",
+        "errorRate": "number",
+        "avgResponseTime": "number"
+      },
+      "users": {
+        "total": "number",
+        "active": "number",
+        "activeRate": "number",
+        "recentActivityRate": "number"
+      }
+    },
+    "problematicSessions": [
+      {
+        "sessionId": "string",
+        "name": "string",
+        "connectionAttempts": "number",
+        "lastError": "string"
+      }
+    ],
+    "topEmployees": [
+      {
+        "name": "string",
+        "email": "string",
+        "completedCount": "number",
+        "avgResolutionTime": "number",
+        "overallScore": "number"
+      }
+    ],
+    "recentActivity": [
+      {
+        "userId": {
+          "name": "string",
+          "email": "string"
+        },
+        "action": "string",
+        "resource": "string",
+        "success": "boolean",
+        "timestamp": "Date"
+      }
+    ],
+    "roleStats": [
+      {
+        "_id": "string",
+        "count": "number",
+        "activeCount": "number"
+      }
+    ]
+  }
+}
+```
+
+#### **GET /employee-metrics**
+```typescript
+// Query Parameters
+?userId=string&sessionId=string&period=2025-01-01
+
+// Response 200
+{
+  "success": true,
+  "data": {
+    "metrics": [
+      {
+        "_id": "string",
+        "userId": {
+          "name": "string",
+          "email": "string",
+          "department": "string",
+          "position": "string"
+        },
+        "sessionId": "string",
+        "period": {
+          "startDate": "Date",
+          "endDate": "Date"
+        },
+        "totalAssigned": "number",
+        "totalCompleted": "number",
+        "totalPending": "number",
+        "totalRejected": "number",
+        "averageResolutionTime": "number",
+        "completionRate": "number",
+        "messagesHandled": "number",
+        "chatsPerDay": "number",
+        "byPriority": {
+          "high": {
+            "assigned": "number",
+            "completed": "number",
+            "avgResolutionTime": "number"
+          },
+          "medium": {
+            "assigned": "number",
+            "completed": "number",
+            "avgResolutionTime": "number"
+          },
+          "low": {
+            "assigned": "number",
+            "completed": "number",
+            "avgResolutionTime": "number"
+          }
+        },
+        "isCurrentPeriod": "boolean",
+        "calculatedAt": "Date"
+      }
+    ],
+    "period": {
+      "startDate": "string",
+      "endDate": "string"
+    },
+    "summary": {
+      "totalEmployees": "number",
+      "avgCompletionRate": "number",
+      "avgResolutionTime": "number"
+    }
+  }
+}
+```
+
+#### **GET /assignment-stats**
+```typescript
+// Query Parameters
+?sessionId=string&status=completed&priority=high&dateRange=2025-01-01,2025-01-31
+
+// Response 200
+{
+  "success": true,
+  "data": {
+    "overview": {
+      "total": "number",
+      "byStatus": ["active", "completed", "pending", "rejected"],
+      "byPriority": ["high", "medium", "low"],
+      "avgResolutionTime": "number",
+      "totalMessages": "number"
+    },
+    "statusBreakdown": [
+      {
+        "_id": "string",
+        "count": "number",
+        "avgTime": "number"
+      }
+    ],
+    "priorityBreakdown": [
+      {
+        "_id": "string",
+        "count": "number",
+        "completed": "number"
+      }
+    ]
+  }
+}
+```
+
+#### **GET /audit-logs**
+```typescript
+// Query Parameters
+?page=1&limit=50&userId=string&action=login&success=true&startDate=2025-01-01&endDate=2025-01-31
+
+// Response 200
+{
+  "success": true,
+  "data": [
+    {
+      "_id": "string",
+      "userId": {
+        "name": "string",
+        "email": "string"
+      },
+      "action": "string",
+      "resource": "string",
+      "resourceId": "string",
+      "details": "object",
+      "ipAddress": "string",
+      "userAgent": "string",
+      "success": "boolean",
+      "errorMessage": "string",
+      "timestamp": "Date"
+    }
+  ],
+  "meta": {
+    "page": "number",
+    "limit": "number",
+    "total": "number",
+    "totalPages": "number"
+  }
+}
+```
+
+#### **GET /audit-stats**
+```typescript
+// Response 200
+{
+  "success": true,
+  "data": {
+    "general": {
+      "totalLogs": "number",
+      "todayLogs": "number",
+      "actionStats": [
+        {
+          "_id": "string",
+          "count": "number",
+          "successCount": "number",
+          "errorCount": "number"
+        }
+      ],
+      "userStats": [
+        {
+          "name": "string",
+          "email": "string",
+          "actionCount": "number",
+          "lastActivity": "Date"
+        }
+      ],
+      "recentErrors": [
+        {
+          "userId": {
+            "name": "string",
+            "email": "string"
+          },
+          "action": "string",
+          "resource": "string",
+          "errorMessage": "string",
+          "timestamp": "Date"
+        }
+      ]
+    }
+  }
+}
+```
+
+#### **GET /security-settings**
+```typescript
+// Response 200
+{
+  "success": true,
+  "data": {
+    "_id": "string",
+    "maxLoginAttempts": "number",
+    "lockoutDuration": "number",
+    "sessionTimeout": "number",
+    "passwordMinLength": "number",
+    "requireSpecialChars": "boolean",
+    "requireNumbers": "boolean",
+    "requireUppercase": "boolean",
+    "passwordExpiryDays": "number",
+    "enable2FA": "boolean",
+    "require2FAForAdmins": "boolean",
+    "auditAllActions": "boolean",
+    "logRetentionDays": "number",
+    "updatedBy": "string",
+    "updatedAt": "Date",
+    "version": "number"
+  }
+}
+```
+
+---
+
+### 👤 **Panel de Empleados (`/api/employee`)**
+
+#### **GET /assignments**
+```typescript
+// Query Parameters
+?sessionId=string&status=active
+
+// Response 200
+{
+  "success": true,
+  "data": [
+    {
+      "_id": "string",
+      "sessionId": "string",
+      "chatId": "string",
+      "user": "ObjectId",
+      "assignedBy": {
+        "_id": "string",
+        "name": "string"
+      },
+      "status": "active|completed|pending|rejected",
+      "priority": "high|medium|low",
+      "notes": "string",
+      "assignedAt": "Date",
+      "completedAt": "Date",
+      "completionNotes": "string",
+      "metadata": {
+        "chatName": "string",
+        "messageCount": "number",
+        "lastActivity": "Date"
+      },
+      "metrics": {
+        "messagesExchanged": "number",
+        "resolutionTime": "number",
+        "satisfaction": "number"
+      }
+    }
+  ]
+}
+```
+
+#### **PUT /assignments/:assignmentId/status**
+```typescript
+// Request Body
+{
+  "status": "completed|pending|rejected",
+  "notes": "string"
+}
+
+// Response 200
+{
+  "success": true,
+  "data": {
+    "_id": "string",
+    "sessionId": "string",
+    "chatId": "string",
+    "status": "string",
+    "priority": "string",
+    "notes": "string",
+    "assignedAt": "Date",
+    "completedAt": "Date",
+    "completionNotes": "string"
+  },
+  "message": "Asignación marcada como completed"
+}
+```
+
+#### **GET /assignments/stats**
+```typescript
+// Query Parameters
+?period=2025-01-01
+
+// Response 200
+{
+  "success": true,
+  "data": {
+    "metrics": {
+      "_id": "string",
+      "userId": "string",
+      "sessionId": "string",
+      "period": {
+        "startDate": "Date",
+        "endDate": "Date"
+      },
+      "totalAssigned": "number",
+      "totalCompleted": "number",
+      "totalPending": "number",
+      "totalRejected": "number",
+      "averageResolutionTime": "number",
+      "completionRate": "number",
+      "messagesHandled": "number",
+      "chatsPerDay": "number",
+      "byPriority": {
+        "high": {
+          "assigned": "number",
+          "completed": "number",
+          "avgResolutionTime": "number"
+        },
+        "medium": {
+          "assigned": "number",
+          "completed": "number",
+          "avgResolutionTime": "number"
+        },
+        "low": {
+          "assigned": "number",
+          "completed": "number",
+          "avgResolutionTime": "number"
+        }
+      },
+      "isCurrentPeriod": "boolean",
+      "calculatedAt": "Date"
+    },
+    "period": {
+      "startDate": "string",
+      "endDate": "string"
+    }
+  }
+}
+```
+
+#### **GET /chats**
+```typescript
+// Query Parameters
+?sessionId=string&type=individual&page=1&limit=20
+
+// Response 200
+{
+  "success": true,
+  "data": [
+    {
+      "_id": "string",
+      "sessionId": "string",
+      "chatId": "string",
+      "name": "string",
+      "isGroup": "boolean",
+      "unreadCount": "number",
+      "lastMessage": "string",
+      "lastMessageTime": "Date",
+      "createdAt": "Date"
+    }
+  ],
+  "meta": {
+    "page": "number",
+    "limit": "number",
+    "total": "number",
+    "totalPages": "number"
+  }
+}
+```
+
+---
+
+### 📎 **Multimedia (`/api/media`)**
+
+#### **GET /:fileId**
+```typescript
+// Response 200 - Archivo binario con headers
+Content-Type: "image/jpeg|video/mp4|audio/mp3|application/pdf"
+Content-Length: "number"
+Content-Disposition: "inline; filename=\"archivo.jpg\""
+```
+
+#### **GET /:fileId/info**
+```typescript
+// Response 200
+{
+  "success": true,
+  "data": {
+    "fileId": "string",
+    "messageId": "string",
+    "sessionId": "string",
+    "chatId": "string",
+    "mediaType": "image|video|audio|document|sticker|voice|profile-pic",
+    "filename": "string",
+    "originalFilename": "string",
+    "mimetype": "string",
+    "size": "number",
+    "width": "number",
+    "height": "number",
+    "duration": "number",
+    "caption": "string",
+    "isVoiceNote": "boolean",
+    "isAnimated": "boolean",
+    "createdAt": "Date"
+  }
+}
+```
+
+#### **GET /session/:sessionId**
+```typescript
+// Query Parameters
+?mediaType=image&page=1&limit=20
+
+// Response 200
+{
+  "success": true,
+  "data": [
+    {
+      "fileId": "string",
+      "messageId": "string",
+      "sessionId": "string",
+      "chatId": "string",
+      "mediaType": "string",
+      "filename": "string",
+      "originalFilename": "string",
+      "mimetype": "string",
+      "size": "number",
+      "createdAt": "Date"
+    }
+  ],
+  "meta": {
+    "page": "number",
+    "limit": "number",
+    "total": "number",
+    "totalPages": "number"
+  }
+}
+```
+
+---
+
+### 📊 **Estadísticas de Sesiones (`/api/sessions/...`)**
+
+#### **GET /stats**
+```typescript
+// Response 200
+{
+  "success": true,
+  "data": {
+    "totalSessions": "number",
+    "activeSessions": "number",
+    "connectedSessions": "number",
+    "totalMessages": "number",
+    "messagesPerHour": "number",
+    "uptime": "number",
+    "errorRate": "number"
+  }
+}
+```
+
+#### **GET /active**
+```typescript
+// Response 200
+{
+  "success": true,
+  "data": [
+    {
+      "sessionId": "string",
+      "name": "string",
+      "isConnected": "boolean",
+      "lastSeen": "Date",
+      "messageCount": "number"
+    }
+  ]
+}
+```
+
+#### **GET /connected**
+```typescript
+// Response 200
+{
+  "success": true,
+  "data": [
+    {
+      "sessionId": "string",
+      "name": "string",
+      "connectedAt": "Date",
+      "uptime": "number"
+    }
+  ]
+}
+```
+
+---
+
+## 📋 **Códigos de Estado HTTP Utilizados**
+
+| Código | Descripción | Uso típico |
+|--------|-------------|------------|
+| `200` | OK | Operación exitosa |
+| `201` | Created | Recurso creado exitosamente |
+| `400` | Bad Request | Datos de entrada inválidos |
+| `401` | Unauthorized | Token inválido o expirado |
+| `403` | Forbidden | Permisos insuficientes |
+| `404` | Not Found | Recurso no encontrado |
+| `409` | Conflict | Conflicto (ej: email duplicado) |
+| `500` | Internal Server Error | Error interno del servidor |
+
+---
+
+## 🔒 **Estructura de Errores Consistente**
+
+Todos los errores siguen el mismo formato:
+
+```typescript
+{
+  "success": false,
+  "error": "Mensaje descriptivo del error",
+  // Opcional: detalles adicionales
+  "details": {
+    "field": "campo específico con error",
+    "code": "código de error específico"
+  }
+}
+```
+
+**Ejemplos:**
+```typescript
+// Error de validación
+{
+  "success": false,
+  "error": "Datos de entrada inválidos",
+  "details": {
+    "email": "Email requerido",
+    "password": "Debe tener al menos 6 caracteres"
+  }
+}
+
+// Error de permisos
+{
+  "success": false,
+  "error": "No tienes permisos para acceder a este chat",
+  "details": {
+    "requiredRole": "administrator",
+    "userRole": "empleado"
+  }
+}
+
+// Error de recurso no encontrado
+{
+  "success": false,
+  "error": "Usuario no encontrado",
+  "details": {
+    "resourceId": "user_123",
+    "resourceType": "User"
+  }
+}
+```
+
+---
+
+Este catálogo completo de modelos de respuesta proporciona toda la información necesaria para integrar con la API del sistema empresarial. 🚀

@@ -1,4 +1,10 @@
 import { Request, Response } from "express";
+import { Assignment } from "../models/Assignment";
+import { AssignmentMetrics } from "../models/AssignmentMetrics";
+import { User } from "../models/User";
+import { Session } from "../models/Session";
+import { Chat } from "../models/Chat";
+import { Message } from "../models/Message";
 import { AuditLog } from "../models/AuditLog";
 import { SecuritySettings } from "../models/SecuritySettings";
 
@@ -268,36 +274,344 @@ export const logAction = async (
 // LIMPIEZA DE LOGS ANTIGUOS
 // =====================================================
 
-export const cleanupOldLogs = async (req: Request, res: Response) => {
+// =====================================================
+// DASHBOARD ADMINISTRATIVO
+// =====================================================
+
+export const getDashboard = async (req: Request, res: Response) => {
   try {
-    const settings = await SecuritySettings.getSettings();
-    const cutoffDate = new Date();
-    cutoffDate.setDate(cutoffDate.getDate() - settings.logRetentionDays);
-
-    const result = await AuditLog.deleteMany({
-      timestamp: { $lt: cutoffDate }
-    });
-
-    // Registrar la limpieza
     const authUser = (req as any).user;
-    await AuditLog.create({
-      userId: authUser?.sub,
-      action: "cleanup",
-      resource: "audit-logs",
-      details: {
-        deletedCount: result.deletedCount,
-        cutoffDate: cutoffDate.toISOString(),
-        retentionDays: settings.logRetentionDays
+
+    // Estadísticas generales del sistema
+    const [
+      totalSessions,
+      activeSessions,
+      totalUsers,
+      activeUsers,
+      totalChats,
+      totalMessages,
+      totalAssignments,
+      activeAssignments,
+      completedAssignments,
+      pendingAssignments
+    ] = await Promise.all([
+      Session.countDocuments(),
+      Session.countDocuments({ isActive: true }),
+      User.countDocuments(),
+      User.countDocuments({ active: true }),
+      Chat.countDocuments(),
+      Message.countDocuments(),
+      Assignment.countDocuments(),
+      Assignment.countDocuments({ active: true }),
+      Assignment.countDocuments({ status: "completed" }),
+      Assignment.countDocuments({ status: "pending" })
+    ]);
+
+    // Sesiones problemáticas (con muchos errores)
+    const problematicSessions = await Session.find({
+      connectionAttempts: { $gte: 5 },
+      lastError: { $exists: true }
+    })
+      .sort({ connectionAttempts: -1 })
+      .limit(5)
+      .select("sessionId name connectionAttempts lastError");
+
+    // Empleados más activos (por chats completados)
+    const topEmployees = await Assignment.aggregate([
+      {
+        $match: {
+          status: "completed",
+          completedAt: { $exists: true }
+        }
       },
-      success: true,
-      timestamp: new Date()
-    });
+      {
+        $group: {
+          _id: "$user",
+          completedCount: { $sum: 1 },
+          avgResolutionTime: { $avg: "$metrics.resolutionTime" }
+        }
+      },
+      {
+        $lookup: {
+          from: "users",
+          localField: "_id",
+          foreignField: "_id",
+          as: "user"
+        }
+      },
+      {
+        $unwind: "$user"
+      },
+      {
+        $project: {
+          name: "$user.name",
+          email: "$user.email",
+          completedCount: 1,
+          avgResolutionTime: 1,
+          overallScore: "$user.performance.overallScore"
+        }
+      },
+      { $sort: { completedCount: -1 } },
+      { $limit: 10 }
+    ]);
+
+    // Actividad reciente (últimas 24 horas)
+    const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const recentActivity = await AuditLog.find({
+      timestamp: { $gte: oneDayAgo }
+    })
+      .populate("userId", "name email")
+      .sort({ timestamp: -1 })
+      .limit(10);
+
+    // Métricas de rendimiento del sistema
+    const systemHealth = await getSystemHealth();
+
+    // Estadísticas por rol
+    const roleStats = await User.aggregate([
+      {
+        $lookup: {
+          from: "roles",
+          localField: "role",
+          foreignField: "_id",
+          as: "role"
+        }
+      },
+      {
+        $unwind: "$role"
+      },
+      {
+        $group: {
+          _id: "$role.name",
+          count: { $sum: 1 },
+          activeCount: {
+            $sum: { $cond: ["$active", 1, 0] }
+          }
+        }
+      }
+    ]);
 
     res.json({
       success: true,
       data: {
-        deletedCount: result.deletedCount,
-        cutoffDate: cutoffDate.toISOString()
+        overview: {
+          totalSessions,
+          activeSessions,
+          totalUsers,
+          activeUsers,
+          totalChats,
+          totalMessages,
+          totalAssignments,
+          activeAssignments,
+          completedAssignments,
+          pendingAssignments
+        },
+        systemHealth,
+        problematicSessions,
+        topEmployees,
+        recentActivity,
+        roleStats
+      }
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: (error as Error).message
+    });
+  }
+};
+
+export const getSystemHealth = async () => {
+  try {
+    // Verificar estado de sesiones
+    const sessionHealth = await Session.aggregate([
+      {
+        $group: {
+          _id: null,
+          total: { $sum: 1 },
+          connected: { $sum: { $cond: ["$isConnected", 1, 0] } },
+          withErrors: { $sum: { $cond: ["$lastError", 1, 0] } },
+          avgResponseTime: { $avg: "$responseTime" }
+        }
+      }
+    ]);
+
+    // Verificar estado de usuarios
+    const userHealth = await User.aggregate([
+      {
+        $group: {
+          _id: null,
+          total: { $sum: 1 },
+          active: { $sum: { $cond: ["$active", 1, 0] } },
+          withRecentActivity: {
+            $sum: {
+              $cond: [
+                { $gte: ["$lastLogin", new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)] },
+                1,
+                0
+              ]
+            }
+          }
+        }
+      }
+    ]);
+
+    // Calcular métricas generales
+    const health = sessionHealth[0] || { total: 0, connected: 0, withErrors: 0 };
+    const userStats = userHealth[0] || { total: 0, active: 0, withRecentActivity: 0 };
+
+    let overallStatus = "excellent";
+    if (health.withErrors > health.total * 0.3 || userStats.active < userStats.total * 0.7) {
+      overallStatus = "warning";
+    }
+    if (health.connected < health.total * 0.5 || userStats.withRecentActivity < userStats.total * 0.5) {
+      overallStatus = "critical";
+    }
+
+    return {
+      status: overallStatus,
+      sessions: {
+        total: health.total,
+        connected: health.connected,
+        errorRate: health.total > 0 ? (health.withErrors / health.total) * 100 : 0,
+        avgResponseTime: health.avgResponseTime || 0
+      },
+      users: {
+        total: userStats.total,
+        active: userStats.active,
+        activeRate: userStats.total > 0 ? (userStats.active / userStats.total) * 100 : 0,
+        recentActivityRate: userStats.total > 0 ? (userStats.withRecentActivity / userStats.total) * 100 : 0
+      }
+    };
+  } catch (error) {
+    return {
+      status: "unknown",
+      error: (error as Error).message
+    };
+  }
+};
+
+export const getEmployeeMetrics = async (req: Request, res: Response) => {
+  try {
+    const { userId, sessionId, period } = req.query;
+
+    // Si no se especifica período, usar el mes actual
+    const now = new Date();
+    const startDate = period
+      ? new Date(period as string)
+      : new Date(now.getFullYear(), now.getMonth(), 1);
+    const endDate = period
+      ? new Date(new Date(period as string).getTime() + 30 * 24 * 60 * 60 * 1000)
+      : new Date(now.getFullYear(), now.getMonth() + 1, 0);
+
+    const filter: any = {
+      "period.startDate": { $gte: startDate },
+      "period.endDate": { $lte: endDate }
+    };
+
+    if (userId) filter.userId = userId;
+    if (sessionId) filter.sessionId = sessionId;
+
+    const metrics = await AssignmentMetrics.find(filter)
+      .populate("userId", "name email department position")
+      .sort({ "completionRate": -1 });
+
+    res.json({
+      success: true,
+      data: {
+        metrics,
+        period: {
+          startDate: startDate.toISOString(),
+          endDate: endDate.toISOString()
+        },
+        summary: {
+          totalEmployees: metrics.length,
+          avgCompletionRate: metrics.length > 0
+            ? metrics.reduce((sum, m) => sum + m.completionRate, 0) / metrics.length
+            : 0,
+          avgResolutionTime: metrics.length > 0
+            ? metrics.reduce((sum, m) => sum + (m.averageResolutionTime || 0), 0) / metrics.length
+            : 0
+        }
+      }
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: (error as Error).message
+    });
+  }
+};
+
+export const getAssignmentStats = async (req: Request, res: Response) => {
+  try {
+    const { sessionId, status, priority, dateRange } = req.query;
+
+    // Filtro base
+    const filter: any = {};
+    if (sessionId) filter.sessionId = sessionId;
+    if (status) filter.status = status;
+    if (priority) filter.priority = priority;
+
+    // Filtro de fechas
+    if (dateRange) {
+      const [startDate, endDate] = (dateRange as string).split(",");
+      filter.assignedAt = {};
+      if (startDate) filter.assignedAt.$gte = new Date(startDate);
+      if (endDate) filter.assignedAt.$lte = new Date(endDate);
+    }
+
+    // Estadísticas generales
+    const stats = await Assignment.aggregate([
+      { $match: filter },
+      {
+        $group: {
+          _id: null,
+          total: { $sum: 1 },
+          byStatus: {
+            $push: "$status"
+          },
+          byPriority: {
+            $push: "$priority"
+          },
+          avgResolutionTime: { $avg: "$metrics.resolutionTime" },
+          totalMessages: { $sum: "$metrics.messagesExchanged" }
+        }
+      }
+    ]);
+
+    // Estadísticas por estado
+    const statusBreakdown = await Assignment.aggregate([
+      { $match: filter },
+      {
+        $group: {
+          _id: "$status",
+          count: { $sum: 1 },
+          avgTime: { $avg: "$metrics.resolutionTime" }
+        }
+      }
+    ]);
+
+    // Estadísticas por prioridad
+    const priorityBreakdown = await Assignment.aggregate([
+      { $match: filter },
+      {
+        $group: {
+          _id: "$priority",
+          count: { $sum: 1 },
+          completed: {
+            $sum: { $cond: [{ $eq: ["$status", "completed"] }, 1, 0] }
+          }
+        }
+      }
+    ]);
+
+    res.json({
+      success: true,
+      data: {
+        overview: stats[0] || {},
+        statusBreakdown,
+        priorityBreakdown
       }
     });
   } catch (error) {

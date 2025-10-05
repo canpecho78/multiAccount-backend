@@ -1,10 +1,13 @@
 import { Router } from "express";
 import {
+  getDashboard,
+  getSystemHealth,
+  getEmployeeMetrics,
+  getAssignmentStats,
   getAuditLogs,
   getAuditStats,
   getSecuritySettings,
-  updateSecuritySettings,
-  cleanupOldLogs
+  updateSecuritySettings
 } from "../controllers/adminController";
 import {
   listUsers,
@@ -37,6 +40,85 @@ router.use(requireRoles("administrator"));
  *   - name: Admin
  *     description: Funciones administrativas (solo administrador)
  */
+
+// =====================================================
+// DASHBOARD Y MÉTRICAS
+// =====================================================
+
+/**
+ * @swagger
+ * /api/admin/dashboard:
+ *   get:
+ *     tags: [Admin]
+ *     security: [{ bearerAuth: [] }]
+ *     summary: Dashboard administrativo completo
+ *     responses:
+ *       200:
+ *         description: Datos del dashboard
+ */
+router.get("/dashboard", getDashboard);
+
+/**
+ * @swagger
+ * /api/admin/system/health:
+ *   get:
+ *     tags: [Admin]
+ *     security: [{ bearerAuth: [] }]
+ *     summary: Estado de salud del sistema
+ *     responses:
+ *       200:
+ *         description: Métricas de salud del sistema
+ */
+router.get("/system/health", getSystemHealth);
+
+/**
+ * @swagger
+ * /api/admin/employee-metrics:
+ *   get:
+ *     tags: [Admin]
+ *     security: [{ bearerAuth: [] }]
+ *     summary: Métricas de rendimiento de empleados
+ *     parameters:
+ *       - in: query
+ *         name: userId
+ *         schema: { type: string }
+ *       - in: query
+ *         name: sessionId
+ *         schema: { type: string }
+ *       - in: query
+ *         name: period
+ *         schema: { type: string, format: date }
+ *     responses:
+ *       200:
+ *         description: Métricas de empleados
+ */
+router.get("/employee-metrics", getEmployeeMetrics);
+
+/**
+ * @swagger
+ * /api/admin/assignment-stats:
+ *   get:
+ *     tags: [Admin]
+ *     security: [{ bearerAuth: [] }]
+ *     summary: Estadísticas de asignaciones
+ *     parameters:
+ *       - in: query
+ *         name: sessionId
+ *         schema: { type: string }
+ *       - in: query
+ *         name: status
+ *         schema: { type: string }
+ *       - in: query
+ *         name: priority
+ *         schema: { type: string }
+ *       - in: query
+ *         name: dateRange
+ *         schema: { type: string }
+ *     responses:
+ *       200:
+ *         description: Estadísticas de asignaciones
+ */
+router.get("/assignment-stats", getAssignmentStats);
 
 // =====================================================
 // GESTIÓN DE USUARIOS
@@ -246,8 +328,7 @@ router.get("/roles", listRoles);
  *       - in: path
  *         name: id
  *         required: true
- *         schema:
- *           type: string
+ *         schema: { type: string }
  *     responses:
  *       200:
  *         description: Rol
@@ -268,12 +349,9 @@ router.get("/roles/:id", getRole);
  *           schema:
  *             type: object
  *             properties:
- *               name:
- *                 type: string
- *               description:
- *                 type: string
- *               active:
- *                 type: boolean
+ *               name: { type: string }
+ *               description: { type: string }
+ *               active: { type: boolean }
  *     responses:
  *       201:
  *         description: Rol creado
@@ -291,10 +369,8 @@ router.post("/roles", createRole);
  *       - in: path
  *         name: id
  *         required: true
- *         schema:
- *           type: string
+ *         schema: { type: string }
  *     requestBody:
- *       required: false
  *       content:
  *         application/json:
  *           schema:
@@ -320,8 +396,7 @@ router.put("/roles/:id", updateRole);
  *       - in: path
  *         name: id
  *         required: true
- *         schema:
- *           type: string
+ *         schema: { type: string }
  *     responses:
  *       200:
  *         description: Eliminado
@@ -383,19 +458,6 @@ router.get("/audit-logs", getAuditLogs);
  */
 router.get("/audit-stats", getAuditStats);
 
-/**
- * @swagger
- * /api/admin/audit-logs/cleanup:
- *   post:
- *     tags: [Admin]
- *     security: [{ bearerAuth: [] }]
- *     summary: Limpiar logs antiguos
- *     responses:
- *       200:
- *         description: Logs limpiados
- */
-router.post("/audit-logs/cleanup", cleanupOldLogs);
-
 // =====================================================
 // CONFIGURACIÓN DE SEGURIDAD
 // =====================================================
@@ -427,36 +489,18 @@ router.get("/security-settings", getSecuritySettings);
  *           schema:
  *             type: object
  *             properties:
- *               maxLoginAttempts:
- *                 type: integer
- *                 minimum: 1
- *               lockoutDuration:
- *                 type: integer
- *                 minimum: 1
- *               sessionTimeout:
- *                 type: integer
- *                 minimum: 1
- *               passwordMinLength:
- *                 type: integer
- *                 minimum: 6
- *               requireSpecialChars:
- *                 type: boolean
- *               requireNumbers:
- *                 type: boolean
- *               requireUppercase:
- *                 type: boolean
- *               passwordExpiryDays:
- *                 type: integer
- *                 minimum: 1
- *               enable2FA:
- *                 type: boolean
- *               require2FAForAdmins:
- *                 type: boolean
- *               auditAllActions:
- *                 type: boolean
- *               logRetentionDays:
- *                 type: integer
- *                 minimum: 1
+ *               maxLoginAttempts: { type: integer, minimum: 1 }
+ *               lockoutDuration: { type: integer, minimum: 1 }
+ *               sessionTimeout: { type: integer, minimum: 1 }
+ *               passwordMinLength: { type: integer, minimum: 6 }
+ *               requireSpecialChars: { type: boolean }
+ *               requireNumbers: { type: boolean }
+ *               requireUppercase: { type: boolean }
+ *               passwordExpiryDays: { type: integer, minimum: 1 }
+ *               enable2FA: { type: boolean }
+ *               require2FAForAdmins: { type: boolean }
+ *               auditAllActions: { type: boolean }
+ *               logRetentionDays: { type: integer, minimum: 1 }
  *     responses:
  *       200:
  *         description: Configuración actualizada
