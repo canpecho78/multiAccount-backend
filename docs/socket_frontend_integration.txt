@@ -1,0 +1,359 @@
+SOCKET.IO INTEGRATION - GUÍA MANUAL PARA FRONTEND
+
+================================================================================
+CONFIGURACIÓN BÁSICA
+================================================================================
+
+1. INSTALACIÓN:
+   npm install socket.io-client
+
+2. CONEXIÓN AL SOCKET:
+   ```javascript
+   import { io } from 'socket.io-client';
+
+   // Conectar al socket del backend
+   const socket = io('http://localhost:5000', {
+     auth: {
+       token: 'TU_JWT_TOKEN_SIN_BEARER'
+     }
+     // O usando headers:
+     // extraHeaders: {
+     //   authorization: 'Bearer TU_JWT_TOKEN'
+     // }
+   });
+
+   // Verificar conexión
+   socket.on('connect', () => {
+     console.log('✅ Conectado al socket:', socket.id);
+   });
+
+   socket.on('disconnect', () => {
+     console.log('❌ Desconectado del socket');
+   });
+   ```
+
+================================================================================
+EVENTOS DISPONIBLES
+================================================================================
+
+1. CREAR SESIÓN WHATSAPP
+   ```javascript
+   // Crear nueva sesión
+   socket.emit('create-session', {
+     sessionId: 'mi-sesion-001',
+     name: 'Sesión de Prueba',
+     phone: '+1234567890'
+   });
+
+   // O solo con sessionId
+   socket.emit('create-session', 'mi-sesion-001');
+   ```
+
+2. ENVIAR MENSAJE
+   ```javascript
+   socket.emit('send-message', {
+     sessionId: 'mi-sesion-001',
+     to: '1234567890@c.us',        // Formato WhatsApp
+     text: 'Hola desde el frontend!'
+   });
+
+   // Escuchar errores
+   socket.on('message-error', (error) => {
+     console.error('Error enviando mensaje:', error.error);
+     // Mostrar error al usuario
+     alert('Error: ' + error.error);
+   });
+   ```
+
+3. OBTENER SESIONES
+   ```javascript
+   // Solicitar lista de sesiones
+   socket.emit('get-sessions');
+
+   // Escuchar respuesta
+   socket.on('sessions-list', (sessions) => {
+     console.log('Sesiones disponibles:', sessions);
+     // sessions es un array con formato:
+     // [
+     //   {
+     //     _id: "ObjectId",
+     //     sessionId: "mi-sesion-001",
+     //     name: "Sesión de Prueba",
+     //     phone: "+1234567890",
+     //     isConnected: true/false,
+     //     lastSeen: "2024-01-01T10:30:00.000Z"
+     //   }
+     // ]
+   });
+   ```
+
+4. OBTENER CHATS
+   ```javascript
+   // Solicitud básica
+   socket.emit('get-chats', 'mi-sesion-001');
+
+   // Solicitud avanzada con filtros
+   socket.emit('get-chats', {
+     sessionId: 'mi-sesion-001',
+     page: 1,                    // Página (default: 1)
+     limit: 20,                  // Cantidad por página (default: 20, max: 100)
+     type: 'all'                 // 'all', 'group', 'individual'
+   });
+
+   // Escuchar respuesta
+   socket.on('chats-list', (data) => {
+     console.log('Chats:', data.chats);
+     console.log('Meta:', data.meta);
+     // data.chats: array de chats
+     // data.meta: { page, limit, total, totalPages }
+   });
+   ```
+
+5. OBTENER MENSAJES DE UN CHAT
+   ```javascript
+   socket.emit('get-messages', {
+     sessionId: 'mi-sesion-001',
+     chatId: '1234567890@c.us',   // ID del chat
+     page: 1,                     // Página (default: 1)
+     limit: 50                    // Mensajes por página (default: 50, max: 200)
+   });
+
+   // Escuchar respuesta
+   socket.on('messages-list', (data) => {
+     console.log('Mensajes:', data.messages);
+     console.log('Chat ID:', data.chatId);
+     // data.messages: array de mensajes (ordenados por timestamp ascendente)
+     // data.meta: { page, limit, total, totalPages }
+   });
+   ```
+
+6. DESCONECTAR SESIÓN
+   ```javascript
+   socket.emit('disconnect-session', 'mi-sesion-001');
+   ```
+
+================================================================================
+CONTROL DE ACCESO (ACL)
+================================================================================
+
+IMPORTANTE: El sistema tiene control de acceso por roles:
+
+- **Administrador/Supervisor**: Acceso total a todos los chats
+- **Empleado**: Solo puede ver/enviar mensajes a chats asignados
+
+El sistema verifica automáticamente las asignaciones antes de permitir acciones.
+
+================================================================================
+EJEMPLO DE COMPONENTE REACT COMPLETO
+================================================================================
+
+```javascript
+import React, { useEffect, useState, useRef } from 'react';
+import { io } from 'socket.io-client';
+
+const WhatsAppManager = () => {
+  const [socket, setSocket] = useState(null);
+  const [sessions, setSessions] = useState([]);
+  const [chats, setChats] = useState([]);
+  const [messages, setMessages] = useState([]);
+  const [selectedSession, setSelectedSession] = useState('');
+  const [selectedChat, setSelectedChat] = useState('');
+  const [messageText, setMessageText] = useState('');
+  const [isConnected, setIsConnected] = useState(false);
+
+  // Inicializar socket
+  useEffect(() => {
+    const token = localStorage.getItem('jwt_token');
+
+    const newSocket = io('http://localhost:5000', {
+      auth: { token }
+    });
+
+    newSocket.on('connect', () => {
+      console.log('✅ Conectado al socket');
+      setIsConnected(true);
+    });
+
+    newSocket.on('disconnect', () => {
+      console.log('❌ Desconectado del socket');
+      setIsConnected(false);
+    });
+
+    // Listeners de eventos
+    newSocket.on('sessions-list', (data) => {
+      setSessions(data);
+    });
+
+    newSocket.on('chats-list', (data) => {
+      setChats(data.chats);
+    });
+
+    newSocket.on('messages-list', (data) => {
+      setMessages(data.messages);
+    });
+
+    newSocket.on('message-error', (error) => {
+      alert('Error: ' + error.error);
+    });
+
+    setSocket(newSocket);
+
+    // Cargar sesiones al conectar
+    newSocket.on('connect', () => {
+      newSocket.emit('get-sessions');
+    });
+
+    return () => newSocket.close();
+  }, []);
+
+  // Funciones auxiliares
+  const loadChats = (sessionId) => {
+    setSelectedSession(sessionId);
+    socket.emit('get-chats', sessionId);
+  };
+
+  const loadMessages = (chatId) => {
+    setSelectedChat(chatId);
+    socket.emit('get-messages', {
+      sessionId: selectedSession,
+      chatId,
+      limit: 50
+    });
+  };
+
+  const sendMessage = () => {
+    if (socket && messageText.trim()) {
+      socket.emit('send-message', {
+        sessionId: selectedSession,
+        to: selectedChat,
+        text: messageText
+      });
+      setMessageText('');
+    }
+  };
+
+  const createSession = () => {
+    const sessionId = prompt('Ingrese ID de sesión:');
+    if (sessionId) {
+      socket.emit('create-session', {
+        sessionId,
+        name: `Sesión ${sessionId}`,
+        phone: 'Desconocido'
+      });
+    }
+  };
+
+  return (
+    <div style={{ padding: '20px' }}>
+      <h1>WhatsApp Manager</h1>
+
+      {/* Estado de conexión */}
+      <div style={{ marginBottom: '20px' }}>
+        Estado: {isConnected ? '🟢 Conectado' : '🔴 Desconectado'}
+      </div>
+
+      {/* Botón crear sesión */}
+      <button onClick={createSession} style={{ marginBottom: '20px' }}>
+        Crear Nueva Sesión
+      </button>
+
+      {/* Lista de sesiones */}
+      <div style={{ marginBottom: '20px' }}>
+        <h3>Sesiones</h3>
+        <select onChange={(e) => loadChats(e.target.value)}>
+          <option value="">Seleccionar sesión...</option>
+          {sessions.map((session) => (
+            <option key={session.sessionId} value={session.sessionId}>
+              {session.name} - {session.isConnected ? '🟢' : '🔴'}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      {/* Lista de chats */}
+      <div style={{ marginBottom: '20px' }}>
+        <h3>Chats</h3>
+        <select onChange={(e) => loadMessages(e.target.value)}>
+          <option value="">Seleccionar chat...</option>
+          {chats.map((chat) => (
+            <option key={chat.chatId} value={chat.chatId}>
+              {chat.name || chat.chatId}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      {/* Mensajes */}
+      <div style={{ marginBottom: '20px' }}>
+        <h3>Mensajes</h3>
+        <div style={{
+          border: '1px solid #ccc',
+          height: '300px',
+          overflowY: 'auto',
+          padding: '10px'
+        }}>
+          {messages.map((msg, index) => (
+            <div key={index} style={{
+              marginBottom: '10px',
+              padding: '10px',
+              backgroundColor: msg.fromMe ? '#e3f2fd' : '#f5f5f5',
+              borderRadius: '5px'
+            }}>
+              <strong>{msg.fromMe ? 'Yo' : 'Contacto'}:</strong> {msg.text}
+              <br />
+              <small>{new Date(msg.timestamp).toLocaleString()}</small>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Enviar mensaje */}
+      <div>
+        <input
+          type="text"
+          value={messageText}
+          onChange={(e) => setMessageText(e.target.value)}
+          placeholder="Escribir mensaje..."
+          style={{ width: '300px', marginRight: '10px' }}
+          onKeyPress={(e) => e.key === 'Enter' && sendMessage()}
+        />
+        <button onClick={sendMessage} disabled={!selectedChat}>
+          Enviar
+        </button>
+      </div>
+    </div>
+  );
+};
+
+export default WhatsAppManager;
+```
+
+================================================================================
+NOTAS IMPORTANTES
+================================================================================
+
+1. **Autenticación**: El socket requiere JWT token válido
+2. **Puerto**: Usa el mismo puerto que tu API REST (5000 por defecto)
+3. **Formato de números**: WhatsApp requiere formato internacional con @c.us
+4. **Control de acceso**: Los empleados solo ven chats asignados
+5. **Reconexión**: Socket.IO maneja reconexión automática
+6. **CORS**: Configurado para aceptar todos los orígenes (*)
+
+================================================================================
+TESTING RÁPIDO
+================================================================================
+
+Para probar rápidamente en el navegador:
+
+```javascript
+// Abrir consola del navegador (F12)
+const socket = io('http://localhost:5000', {
+  auth: { token: 'TU_JWT_TOKEN' }
+});
+
+// Probar eventos
+socket.emit('get-sessions');
+socket.on('sessions-list', (data) => console.log(data));
+```
+
+¿Necesitas ejemplos específicos para algún evento o alguna adaptación particular para tu frontend?
