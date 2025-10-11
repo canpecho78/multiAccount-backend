@@ -1,21 +1,31 @@
-# Multi-Account WhatsApp Backend
+# 📱 Multi-Account WhatsApp Backend
 
-Este proyecto implementa un backend completo para manejar múltiples sesiones de WhatsApp usando Baileys, con almacenamiento de autenticación en MongoDB, sistema de multimedia integrado, gestión avanzada de usuarios y funcionalidades empresariales.
+Sistema backend empresarial completo para gestión de múltiples sesiones de WhatsApp con Baileys, almacenamiento en MongoDB, sistema de multimedia integrado, WebSockets en tiempo real, gestión avanzada de usuarios y funcionalidades empresariales.
+
+> **Última actualización**: 2025-10-10 | **Versión**: 2.0.0
 
 ## 🚀 Características Principales
 
+### Core Features
 - ✅ **Múltiples sesiones de WhatsApp simultáneas** (soporta 30+ sesiones)
 - ✅ **Almacenamiento de autenticación en MongoDB** (escalable y persistente)
 - ✅ **Sistema de multimedia con MongoDB** (imágenes, videos, audios, documentos, stickers)
-- ✅ **Sistema de gestión de usuarios avanzado** (roles, permisos, asignaciones)
-- ✅ **Sistema de emails SMTP** (recuperación de contraseña, notificaciones)
-- ✅ **API RESTful completa** para gestión de sesiones, mensajes y multimedia
-- ✅ **WebSockets** para comunicación en tiempo real
+- ✅ **WebSockets en tiempo real** con eventos bidireccionales
+- ✅ **API RESTful completa** (30+ endpoints documentados)
+
+### Gestión de Usuarios y Seguridad
 - ✅ **Sistema de roles y autenticación JWT** con permisos granulares
-- ✅ **Panel de administración web incluido** con dashboard completo
 - ✅ **Sistema de asignaciones** para empleados (control de acceso por chat)
-- ✅ **Monitoreo avanzado** con métricas en tiempo real
+- ✅ **Sistema de emails SMTP** (recuperación de contraseña, notificaciones)
+- ✅ **Control de acceso avanzado** (ACL por rol y asignación)
+
+### Funcionalidades Avanzadas
+- ✅ **Gestión de chats mejorada** (pin, archive, mark as read)
+- ✅ **Sincronización automática** de lastMessageTime desde mensajes
+- ✅ **Ordenamiento inteligente** (chats anclados primero)
+- ✅ **Monitoreo en tiempo real** con métricas y estadísticas
 - ✅ **Limpieza automática** de sesiones y recursos
+- ✅ **Panel de administración web** con dashboard completo
 
 ## 🛠 Configuración
 

@@ -413,6 +413,18 @@ class WhatsAppService {
 
       console.log(`📨 Mensaje recibido de ${from} en sesión ${sessionId}`);
 
+      // Mapear messageType de Baileys a tipo simplificado
+      let simplifiedMessageType = 'text';
+      if (messageType === 'imageMessage' || messageType === 'stickerMessage') {
+        simplifiedMessageType = 'image';
+      } else if (messageType === 'videoMessage') {
+        simplifiedMessageType = 'video';
+      } else if (messageType === 'audioMessage') {
+        simplifiedMessageType = 'audio';
+      } else if (messageType === 'documentMessage') {
+        simplifiedMessageType = 'document';
+      }
+
       // Guardar mensaje con datos de multimedia
       try {
         await Message.create({
@@ -424,17 +436,17 @@ class WhatsAppService {
           body: messageContent,
           fromMe: false,
           timestamp,
-          messageType,
+          messageType: simplifiedMessageType, // Tipo simplificado
           status: "delivered",
           // Campos adicionales para multimedia
           mediaUrl: mediaData?.fileId, // Ahora es el fileId en MongoDB
-          mediaType: mediaData?.type,
+          mediaType: messageType, // Tipo original de Baileys
           mediaFilename: mediaData?.filename,
           mediaMimetype: mediaData?.mimetype,
           mediaSize: mediaData?.size,
           isVoiceNote: mediaData?.isVoiceNote || false,
         });
-        console.log(`✅ Mensaje guardado: ${messageId}`);
+        console.log(`✅ Mensaje guardado: ${messageId} (tipo: ${simplifiedMessageType})`);
       } catch (msgError) {
         console.error(`❌ Error guardando mensaje:`, msgError);
       }
@@ -482,6 +494,14 @@ class WhatsAppService {
         );
 
         console.log(`✅ Chat guardado/actualizado: ${from} (${chat.name})`);
+
+        // Emitir evento de chat actualizado para refrescar listas en tiempo real
+        this.io?.emit("chat-updated", {
+          sessionId,
+          chatId: from,
+          action: "new-message",
+          chat: chat.toObject(),
+        });
       } catch (chatError) {
         console.error(`❌ Error guardando chat ${from}:`, chatError);
       }
@@ -490,11 +510,21 @@ class WhatsAppService {
       this.io?.emit("message", {
         sessionId,
         from,
-        text: messageContent,
+        to: sessionId,
+        body: messageContent,
+        text: messageContent, // Mantener por compatibilidad
         timestamp: timestamp.toISOString(),
         messageId,
-        messageType,
-        media: mediaData,
+        fromMe: false,
+        messageType: simplifiedMessageType,
+        status: "delivered",
+        // Campos de multimedia
+        mediaUrl: mediaData?.fileId,
+        mediaType: messageType, // Tipo original de Baileys
+        mediaFilename: mediaData?.filename,
+        mediaMimetype: mediaData?.mimetype,
+        mediaSize: mediaData?.size,
+        isVoiceNote: mediaData?.isVoiceNote || false,
       });
     } catch (error) {
       console.error("❌ Error general handling incoming message:", error);

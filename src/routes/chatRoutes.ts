@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { getChatsBySession } from "../controllers/chatController";
+import { getChatsBySession, togglePinChat, toggleArchiveChat, markChatAsRead } from "../controllers/chatController";
 import { verifyJWT } from "../middleware/auth";
 
 const router = Router();
@@ -48,5 +48,95 @@ const router = Router();
  *         description: Lista de chats
  */
 router.get("/:sessionId/chats", verifyJWT, getChatsBySession);
+
+/**
+ * @swagger
+ * /api/sessions/{sessionId}/chats/{chatId}/pin:
+ *   patch:
+ *     tags: [Chats]
+ *     security: [{ bearerAuth: [] }]
+ *     summary: Anclar o desanclar un chat
+ *     parameters:
+ *       - in: path
+ *         name: sessionId
+ *         required: true
+ *         schema:
+ *           type: string
+ *       - in: path
+ *         name: chatId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               isPinned:
+ *                 type: boolean
+ *     responses:
+ *       200:
+ *         description: Chat actualizado
+ */
+router.patch("/:sessionId/chats/:chatId/pin", verifyJWT, togglePinChat);
+
+/**
+ * @swagger
+ * /api/sessions/{sessionId}/chats/{chatId}/archive:
+ *   patch:
+ *     tags: [Chats]
+ *     security: [{ bearerAuth: [] }]
+ *     summary: Archivar o desarchivar un chat
+ *     parameters:
+ *       - in: path
+ *         name: sessionId
+ *         required: true
+ *         schema:
+ *           type: string
+ *       - in: path
+ *         name: chatId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               isArchived:
+ *                 type: boolean
+ *     responses:
+ *       200:
+ *         description: Chat actualizado
+ */
+router.patch("/:sessionId/chats/:chatId/archive", verifyJWT, toggleArchiveChat);
+
+/**
+ * @swagger
+ * /api/sessions/{sessionId}/chats/{chatId}/read:
+ *   patch:
+ *     tags: [Chats]
+ *     security: [{ bearerAuth: [] }]
+ *     summary: Marcar chat como leído (resetear contador de no leídos)
+ *     parameters:
+ *       - in: path
+ *         name: sessionId
+ *         required: true
+ *         schema:
+ *           type: string
+ *       - in: path
+ *         name: chatId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Chat marcado como leído
+ */
+router.patch("/:sessionId/chats/:chatId/read", verifyJWT, markChatAsRead);
 
 export default router;

@@ -1,0 +1,293 @@
+================================================================================
+  CAMBIOS REQUERIDOS EN EL FRONTEND
+  WhatsApp Multi-Account Backend v2.0.0
+================================================================================
+
+Última actualización: 2025-10-10
+
+================================================================================
+  RESUMEN EJECUTIVO
+================================================================================
+
+El backend ahora envía tipos de mensajes correctos (image, audio, video, etc.)
+y todos los campos de multimedia. Tu frontend debe:
+
+1. Cambiar puerto de 5000 a 3000
+2. Actualizar interface SocketMessage
+3. Agregar listener 'sessions-list'
+4. Usar messageType directamente (no detectar manualmente)
+5. Crear endpoint /api/media en backend
+6. Implementar componentes para renderizar multimedia
+
+================================================================================
+  PARTE 1: CONFIGURACIÓN BÁSICA
+================================================================================
+
+1.1 CAMBIAR URLs DEL BACKEND
+-----------------------------
+
+Archivo: socket-service.ts
+LÍNEA A CAMBIAR:
+  ANTES: private readonly BACKEND_URL = 'http://localhost:5000';
+  DESPUÉS: private readonly BACKEND_URL = 'http://localhost:3000';
+
+Archivo: api-service.ts
+LÍNEA A CAMBIAR:
+  ANTES: private baseURL = 'http://localhost:5000/api';
+  DESPUÉS: private baseURL = 'http://localhost:3000/api';
+
+Archivo: .env.local (CREAR SI NO EXISTE)
+AGREGAR:
+  NEXT_PUBLIC_BACKEND_URL=http://localhost:3000
+  NEXT_PUBLIC_API_URL=http://localhost:3000/api
+
+
+================================================================================
+  PARTE 2: INTERFACES TYPESCRIPT
+================================================================================
+
+2.1 ACTUALIZAR SocketMessage
+-----------------------------
+
+Archivo: socket-service.ts
+
+REMOVER:
+  audioData?: MediaData;
+
+CAMBIAR:
+  messageType: string;
+
+POR:
+  messageType: 'text' | 'image' | 'video' | 'audio' | 'document';
+
+CÓDIGO COMPLETO:
+export interface SocketMessage {
+  messageId: string;
+  chatId: string;
+  sessionId: string;
+  from: string;
+  to: string;
+  body: string;
+  fromMe: boolean;
+  timestamp: Date;
+  messageType: 'text' | 'image' | 'video' | 'audio' | 'document';
+  status: 'sent' | 'delivered' | 'read';
+  mediaUrl?: string;
+  mediaType?: string;
+  mediaFilename?: string;
+  mediaMimetype?: string;
+  mediaSize?: number;
+  isVoiceNote?: boolean;
+}
+
+
+================================================================================
+  PARTE 3: SOCKET SERVICE
+================================================================================
+
+3.1 AGREGAR LISTENER sessions-list
+-----------------------------------
+
+Archivo: socket-service.ts
+Método: setupEventListeners()
+
+AGREGAR DESPUÉS DE listener 'qr':
+
+this.socket.on('sessions-list', (data: SocketSession[]) => {
+  console.log('Lista de sesiones recibida:', data.length);
+  this.emit('sessions-list', data);
+});
+
+
+================================================================================
+  PARTE 4: API SERVICE
+================================================================================
+
+4.1 AGREGAR MÉTODOS PARA CHATS
+-------------------------------
+
+Archivo: api-service.ts
+
+AGREGAR AL FINAL DE LA CLASE:
+
+async pinChat(sessionId: string, chatId: string, isPinned: boolean) {
+  return this.request(`/sessions/${sessionId}/chats/${chatId}/pin`, {
+    method: 'PATCH',
+    body: JSON.stringify({ isPinned }),
+  });
+}
+
+async archiveChat(sessionId: string, chatId: string, isArchived: boolean) {
+  return this.request(`/sessions/${sessionId}/chats/${chatId}/archive`, {
+    method: 'PATCH',
+    body: JSON.stringify({ isArchived }),
+  });
+}
+
+async markChatAsRead(sessionId: string, chatId: string) {
+  return this.request(`/sessions/${sessionId}/chats/${chatId}/read`, {
+    method: 'PATCH',
+  });
+}
+
+
+================================================================================
+  PARTE 5: COMPONENTE DE MENSAJES
+================================================================================
+
+5.1 RENDERIZAR SEGÚN messageType
+---------------------------------
+
+REMOVER: Detección manual con regex ([Nota de voz], [Imagen], etc.)
+
+USAR: Directamente message.messageType del backend
+
+EJEMPLO:
+
+const renderMessage = (message: SocketMessage) => {
+  switch (message.messageType) {
+    case 'audio':
+      if (message.isVoiceNote) {
+        return <VoiceNotePlayer audioUrl={message.mediaUrl} />;
+      }
+      return <AudioPlayer audioUrl={message.mediaUrl} />;
+      
+    case 'image':
+      return <img src={`/api/media/${message.mediaUrl}`} />;
+      
+    case 'video':
+      return <video src={`/api/media/${message.mediaUrl}`} controls />;
+      
+    case 'document':
+      return <a href={`/api/media/${message.mediaUrl}`} download>
+        {message.mediaFilename}
+      </a>;
+      
+    case 'text':
+    default:
+      return <p>{message.body}</p>;
+  }
+};
+
+
+================================================================================
+  PARTE 6: ENDPOINT DE MEDIA (BACKEND)
+================================================================================
+
+6.1 CREAR RUTA PARA SERVIR ARCHIVOS
+------------------------------------
+
+CREAR ARCHIVO: src/routes/mediaRoutes.ts (EN EL BACKEND)
+
+import { Router } from "express";
+import { Media } from "../models/Media";
+import { verifyJWT } from "../middleware/auth";
+
+const router = Router();
+
+router.get("/:fileId", verifyJWT, async (req, res) => {
+  try {
+    const { fileId } = req.params;
+    const media = await Media.findOne({ fileId });
+    
+    if (!media) {
+      return res.status(404).json({ success: false, error: "Archivo no encontrado" });
+    }
+    
+    res.setHeader('Content-Type', media.mimetype || 'application/octet-stream');
+    res.setHeader('Content-Length', media.size);
+    res.setHeader('Content-Disposition', `inline; filename="${media.filename}"`);
+    res.send(media.data);
+  } catch (error) {
+    res.status(500).json({ success: false, error: (error as Error).message });
+  }
+});
+
+export default router;
+
+6.2 REGISTRAR RUTA EN SERVER
+-----------------------------
+
+ARCHIVO: src/server.ts (EN EL BACKEND)
+
+AGREGAR:
+import mediaRoutes from "./routes/mediaRoutes";
+app.use("/api/media", mediaRoutes);
+
+
+================================================================================
+  PARTE 7: COMPONENTES SUGERIDOS
+================================================================================
+
+Ver archivo: WEBSOCKET_FRONTEND_GUIDE.md
+
+Componentes a crear:
+  - ChatMessages.tsx (vista de mensajes)
+  - MessageItem.tsx (renderizado individual)
+  - AudioPlayer.tsx (reproductor de audio)
+  - ChatList.tsx (lista de chats)
+
+Estilos CSS incluidos en la guía completa.
+
+
+================================================================================
+  CHECKLIST DE IMPLEMENTACIÓN
+================================================================================
+
+CONFIGURACIÓN:
+  [ ] Cambiar puerto 5000 → 3000 en socket-service.ts
+  [ ] Cambiar puerto 5000 → 3000 en api-service.ts
+  [ ] Crear .env.local con URLs correctas
+
+INTERFACES:
+  [ ] Actualizar SocketMessage (tipos específicos)
+  [ ] Remover audioData
+
+SERVICIOS:
+  [ ] Agregar listener 'sessions-list'
+  [ ] Agregar métodos pinChat, archiveChat, markChatAsRead
+
+COMPONENTES:
+  [ ] Crear/actualizar componente de mensajes
+  [ ] Usar messageType directamente (no regex)
+  [ ] Implementar renderizado por tipo
+
+BACKEND:
+  [ ] Crear mediaRoutes.ts
+  [ ] Registrar ruta en server.ts
+  [ ] Reiniciar backend
+
+TESTING:
+  [ ] Verificar conexión WebSocket
+  [ ] Probar get-messages
+  [ ] Verificar messageType correcto
+  [ ] Probar multimedia
+
+
+================================================================================
+  COMANDOS ÚTILES
+================================================================================
+
+BACKEND:
+  npm run dev                                    # Iniciar
+  npx ts-node src/scripts/fix-message-types.ts  # Migrar datos
+
+FRONTEND:
+  npm run dev                                    # Iniciar
+  
+MONGODB:
+  db.messages.find({ mediaUrl: { $ne: null } }) # Ver multimedia
+  db.messages.distinct("messageType")           # Ver tipos
+
+
+================================================================================
+  DOCUMENTACIÓN COMPLETA
+================================================================================
+
+Para más detalles, ver:
+  - WEBSOCKET_FRONTEND_GUIDE.md (guía completa con código)
+  - WEBSOCKET_EVENTS_REFERENCE.md (referencia de eventos)
+  - MESSAGE_TYPES_FIX.md (explicación del fix)
+  - FRONTEND_FIXES.md (correcciones específicas)
+
+================================================================================
