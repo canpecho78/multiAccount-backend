@@ -3,6 +3,7 @@ import { AuthState } from "../models/AuthState";
 import { AuthKey } from "../models/AuthKey";
 import { Chat } from "../models/Chat";
 import { Message } from "../models/Message";
+import { Assignment } from "../models/Assignment";
 
 /**
  * SessionManager - Servicio centralizado para gestión de sesiones en MongoDB
@@ -179,12 +180,13 @@ export class SessionManager {
   }
 
   /**
-   * Eliminar sesión completamente (incluyendo auth state y mensajes)
+   * Eliminar sesión completamente (incluyendo datos relacionados)
    */
   async deleteSession(sessionId: string): Promise<void> {
-    // Eliminar en orden: mensajes, chats, auth keys, auth state, sesión
+    // Eliminar en orden: mensajes, chats, assignments, auth keys, auth state, sesión
     await Message.deleteMany({ sessionId });
     await Chat.deleteMany({ sessionId });
+    await Assignment.deleteMany({ sessionId });
     await AuthKey.deleteMany({ sessionId });
     await AuthState.deleteOne({ sessionId });
     await Session.deleteOne({ sessionId });

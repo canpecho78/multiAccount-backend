@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { createSession, disconnectSession, getSessions } from "../controllers/sessionController";
+import { createSession, disconnectSession, getSessions, deleteSession } from "../controllers/sessionController";
 import { verifyJWT, requireRoles } from "../middleware/auth";
 
 const router = Router();
@@ -48,15 +48,15 @@ router.get("/", verifyJWT, getSessions);
  *       200:
  *         description: Sesión iniciada
  */
-router.post("/", verifyJWT, requireRoles("administrator","supervisor"), createSession);
+router.post("/", verifyJWT, createSession);
 
 /**
  * @swagger
- * /api/sessions/{sessionId}:
- *   delete:
+ * /api/sessions/{sessionId}/disconnect:
+ *   post:
  *     tags: [Sessions]
  *     security: [{ bearerAuth: [] }]
- *     summary: Desconectar una sesión
+ *     summary: Desconectar y deshabilitar una sesión (sin borrar datos)
  *     parameters:
  *       - in: path
  *         name: sessionId
@@ -65,8 +65,27 @@ router.post("/", verifyJWT, requireRoles("administrator","supervisor"), createSe
  *           type: string
  *     responses:
  *       200:
- *         description: Sesión desconectada
+ *         description: Sesión desconectada y deshabilitada
  */
-router.delete("/:sessionId", verifyJWT, requireRoles("administrator"), disconnectSession);
+router.post("/:sessionId/disconnect", verifyJWT, disconnectSession);
+
+/**
+ * @swagger
+ * /api/sessions/{sessionId}:
+ *   delete:
+ *     tags: [Sessions]
+ *     security: [{ bearerAuth: [] }]
+ *     summary: Eliminar una sesión completamente
+ *     parameters:
+ *       - in: path
+ *         name: sessionId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Sesión eliminada
+ */
+router.delete("/:sessionId", verifyJWT, deleteSession);
 
 export default router;

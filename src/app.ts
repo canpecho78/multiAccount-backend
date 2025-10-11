@@ -12,6 +12,8 @@ import userRoutes from "./routes/userRoutes";
 import assignmentRoutes from "./routes/assignmentRoutes";
 import adminRoutes from "./routes/adminRoutes";
 import sessionStatsRoutes from "./routes/sessionStats";
+import mediaRoutes from "./routes/mediaRoutes";
+import employeeRoutes from "./routes/employeeRoutes";
 
 const app = express();
 
@@ -38,6 +40,12 @@ app.use("/api/sessions", chatRoutes);
 app.use("/api/sessions", messageRoutes);
 app.use("/api/sessions", assignmentRoutes);
 app.use("/api/sessions", sessionStatsRoutes);
+
+// Media routes
+app.use("/api/media", mediaRoutes);
+
+// Employee routes
+app.use("/api/employee", employeeRoutes);
 
 // Admin routes
 app.use("/api/admin", adminRoutes);

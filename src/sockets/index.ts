@@ -133,13 +133,46 @@ export function registerSocketHandlers(io: Server) {
 
           const total = await Chat.countDocuments(filter);
           const chats = await Chat.find(filter)
-            .sort({ lastMessageTime: -1 })
+            .sort({ isPinned: -1, lastMessageTime: -1 }) // Primero anclados, luego por fecha
             .skip((page - 1) * limit)
             .limit(limit);
 
+          // Sincronizar lastMessageTime desde Message si está desactualizado
+          const chatsWithUpdatedTime = await Promise.all(
+            chats.map(async (chat) => {
+              const chatObj = chat.toObject();
+              
+              // Buscar el último mensaje real de este chat
+              const lastMsg = await Message.findOne({ 
+                sessionId: chat.sessionId, 
+                chatId: chat.chatId 
+              })
+                .sort({ timestamp: -1 })
+                .select('body timestamp')
+                .lean();
+
+              if (lastMsg) {
+                // Si el mensaje más reciente es diferente al guardado, actualizar
+                if (!chat.lastMessageTime || lastMsg.timestamp > chat.lastMessageTime) {
+                  chatObj.lastMessageTime = lastMsg.timestamp;
+                  chatObj.lastMessage = lastMsg.body || chatObj.lastMessage;
+                  
+                  // Actualizar en BD de forma asíncrona
+                  Chat.findByIdAndUpdate(chat._id, {
+                    lastMessageTime: lastMsg.timestamp,
+                    lastMessage: lastMsg.body || chat.lastMessage,
+                    updatedAt: new Date(),
+                  }).exec().catch(err => console.error('Error updating chat:', err));
+                }
+              }
+              
+              return chatObj;
+            })
+          );
+
           socket.emit("chats-list", {
             sessionId,
-            chats,
+            chats: chatsWithUpdatedTime,
             meta: {
               page,
               limit,
@@ -176,10 +209,31 @@ export function registerSocketHandlers(io: Server) {
             .skip((page - 1) * limit)
             .limit(limit);
 
+          // Mapear mensajes con todos los campos de multimedia
+          const messages = docs.reverse().map((msg) => ({
+            messageId: msg.messageId,
+            chatId: msg.chatId,
+            sessionId: msg.sessionId,
+            from: msg.from,
+            to: msg.to,
+            body: msg.body,
+            fromMe: msg.fromMe,
+            timestamp: msg.timestamp,
+            messageType: msg.messageType || 'text',
+            status: msg.status || 'delivered',
+            // Campos de multimedia
+            mediaUrl: msg.mediaUrl || undefined,
+            mediaType: msg.mediaType || undefined,
+            mediaFilename: msg.mediaFilename || undefined,
+            mediaMimetype: msg.mediaMimetype || undefined,
+            mediaSize: msg.mediaSize || undefined,
+            isVoiceNote: msg.isVoiceNote || false,
+          }));
+
           socket.emit("messages-list", {
             sessionId,
             chatId,
-            messages: docs.reverse(),
+            messages,
             meta: {
               page,
               limit,
@@ -199,6 +253,105 @@ export function registerSocketHandlers(io: Server) {
         console.log(`🔌 Sesión desconectada: ${sessionId}`);
       } catch (error) {
         console.error("❌ Error desconectando sesión:", error);
+      }
+    });
+
+    // Anclar/desanclar chat
+    socket.on("pin-chat", async (data: { sessionId: string; chatId: string; isPinned: boolean }) => {
+      try {
+        const { sessionId, chatId, isPinned } = data;
+        
+        const chat = await Chat.findOneAndUpdate(
+          { sessionId, chatId },
+          { isPinned, updatedAt: new Date() },
+          { new: true }
+        );
+
+        if (!chat) {
+          return socket.emit("chat-error", { error: "Chat no encontrado" });
+        }
+
+        // Emitir a todos los clientes conectados
+        io.emit("chat-updated", {
+          sessionId,
+          chatId,
+          action: "pin",
+          chat: chat.toObject(),
+        });
+
+        socket.emit("chat-pin-success", { 
+          message: isPinned ? "Chat anclado" : "Chat desanclado",
+          chat: chat.toObject() 
+        });
+      } catch (error) {
+        console.error("❌ Error anclando chat:", error);
+        socket.emit("chat-error", { error: (error as Error).message });
+      }
+    });
+
+    // Archivar/desarchivar chat
+    socket.on("archive-chat", async (data: { sessionId: string; chatId: string; isArchived: boolean }) => {
+      try {
+        const { sessionId, chatId, isArchived } = data;
+        
+        const chat = await Chat.findOneAndUpdate(
+          { sessionId, chatId },
+          { isArchived, updatedAt: new Date() },
+          { new: true }
+        );
+
+        if (!chat) {
+          return socket.emit("chat-error", { error: "Chat no encontrado" });
+        }
+
+        // Emitir a todos los clientes conectados
+        io.emit("chat-updated", {
+          sessionId,
+          chatId,
+          action: "archive",
+          chat: chat.toObject(),
+        });
+
+        socket.emit("chat-archive-success", { 
+          message: isArchived ? "Chat archivado" : "Chat desarchivado",
+          chat: chat.toObject() 
+        });
+      } catch (error) {
+        console.error("❌ Error archivando chat:", error);
+        socket.emit("chat-error", { error: (error as Error).message });
+      }
+    });
+
+    // Marcar chat como leído
+    socket.on("mark-chat-read", async (data: { sessionId: string; chatId: string }) => {
+      try {
+        const { sessionId, chatId } = data;
+        
+        const chat = await Chat.findOneAndUpdate(
+          { sessionId, chatId },
+          { unreadCount: 0, updatedAt: new Date() },
+          { new: true }
+        );
+
+        if (!chat) {
+          return socket.emit("chat-error", { error: "Chat no encontrado" });
+        }
+
+        // Emitir a todos los clientes conectados
+        io.emit("chat-updated", {
+          sessionId,
+          chatId,
+          action: "read",
+          chat: chat.toObject(),
+        });
+
+        socket.emit("chat-read-success", { 
+          message: "Chat marcado como leído",
+          chat: chat.toObject() 
+        });
+      } catch (error) {
+        console.error("❌ Error marcando chat como leído:", error);
+        socket.emit("chat-error", { error: (error as Error).message });
       }
     });
   });
