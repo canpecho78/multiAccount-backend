@@ -7,6 +7,8 @@ import { Chat } from "../models/Chat";
 import { Message } from "../models/Message";
 import { AuditLog } from "../models/AuditLog";
 import { SecuritySettings } from "../models/SecuritySettings";
+import { whatsappService } from "../services/whatsappService";
+import { env } from "../config/env";
 
 // =====================================================
 // AUDITORÍA - AUDIT LOGS
@@ -222,6 +224,19 @@ export const auditAction = (action: string, resource: string) => {
 
     res.json = function(data: any) {
       // Registrar acción exitosa
+      let safeBody: any = data;
+      try {
+        if (Buffer.isBuffer(data)) {
+          safeBody = "[omitted: buffer]";
+        } else if (typeof data === "string" && data.length > 1000) {
+          safeBody = "[omitted: long string]";
+        } else if (typeof data === "object" && data !== null) {
+          const str = JSON.stringify(data);
+          safeBody = str.length > 2000 ? "[omitted: large object]" : data;
+        }
+      } catch {
+        safeBody = "[omitted: unserializable]";
+      }
       AuditLog.create({
         userId: authUser?.sub,
         action,
@@ -231,7 +246,8 @@ export const auditAction = (action: string, resource: string) => {
           method: req.method,
           url: req.originalUrl,
           body: req.body,
-          responseStatus: res.statusCode
+          responseStatus: res.statusCode,
+          responseBody: safeBody
         },
         ipAddress: req.ip,
         userAgent: req.get('User-Agent'),
@@ -488,6 +504,21 @@ export const getSystemHealth = async () => {
       status: "unknown",
       error: (error as Error).message
     };
+  }
+};
+
+export const getWhatsAppMetrics = async (req: Request, res: Response) => {
+  try {
+    const metrics = whatsappService.getMetrics();
+    res.json({
+      success: true,
+      data: {
+        allowGroups: env.allowGroups,
+        metrics,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: (error as Error).message });
   }
 };
 

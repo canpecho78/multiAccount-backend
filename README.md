@@ -2,7 +2,7 @@
 
 Sistema backend empresarial completo para gestión de múltiples sesiones de WhatsApp con Baileys, almacenamiento en MongoDB, sistema de multimedia integrado, WebSockets en tiempo real, gestión avanzada de usuarios y funcionalidades empresariales.
 
-> **Última actualización**: 2025-10-10 | **Versión**: 2.0.0
+> **Última actualización**: 2025-10-21 | **Versión**: 1.0.0
 
 ## 🚀 Características Principales
 
@@ -38,11 +38,16 @@ Crea un archivo `.env` basado en `.env.example`:
 MONGODB_URI=mongodb://localhost:27017/whatsapp-multi-session
 
 # Server Configuration
-PORT=5000
+PORT=5001
 
 # Auth Storage Configuration
 # AUTH_STORAGE can be 'file' or 'mongo'. Default is 'mongo' (recommended for production)
 AUTH_STORAGE=mongo
+
+# Groups behavior
+# ALLOW_GROUPS controls if the system should process and allow sending to WhatsApp groups (@g.us)
+# Set to true to allow groups, false to restrict to individual contacts only (default: false)
+ALLOW_GROUPS=false
 
 # JWT Configuration
 JWT_SECRET=super-secret-change-me
@@ -88,6 +93,31 @@ pnpm seed
 
 # Ejecutar pruebas
 pnpm test
+```
+
+## 📘 Documentación API (Swagger)
+
+- URL local: `http://localhost:5001/api/docs`
+- Especificación: OpenAPI 3.0 (`src/docs/swagger.ts`)
+
+## 📈 Métricas (Prometheus)
+
+- Endpoint: `GET http://localhost:5001/metrics`
+- Registro y contadores definidos en `src/metrics/metrics.ts`
+- Métricas personalizadas:
+  - `wa_skipped_messages_non_contact_total`
+  - `wa_skipped_chats_non_contact_total`
+  - `wa_skipped_presence_non_contact_total`
+- Para habilitar el scrape en Prometheus:
+  - Instala dependencias y levanta el backend
+  - Añade un job en tu `prometheus.yml`:
+
+```yaml
+scrape_configs:
+  - job_name: 'whatsapp-multiaccount'
+    scrape_interval: 15s
+    static_configs:
+      - targets: ['localhost:5001']
 ```
 
 ## 🔧 Características Avanzadas
@@ -188,6 +218,7 @@ pnpm test
 - `GET /api/sessions/:sessionId/details` - Detalles de una sesión
 - `GET /api/sessions/problematic` - Sesiones con problemas
 - `POST /api/sessions/:sessionId/reset-attempts` - Resetear intentos
+- `POST /api/sessions/:sessionId/health-check` - Actualizar health check
 - `DELETE /api/sessions/:sessionId/cleanup` - Limpiar sesión
 - `POST /api/sessions/cleanup-inactive` - Limpiar sesiones inactivas
 
@@ -195,6 +226,10 @@ pnpm test
 - `POST /api/sessions/:sessionId/messages` - Enviar mensaje (texto o multimedia)
 - `GET /api/sessions/:sessionId/chats` - Obtener chats (con filtros por tipo y permisos)
 - `GET /api/sessions/:sessionId/messages` - Obtener mensajes de un chat
+
+### Contactos
+- `GET /api/contacts/:sessionId` - Listar contactos por sesión (`?onlyIndividuals=true|false`)
+- `GET /api/contacts/:sessionId/:jid` - Obtener un contacto específico
 
 ### Sistema de Asignaciones
 - `POST /api/sessions/:sessionId/assignments` - Asignar chats a empleados
@@ -304,10 +339,8 @@ Servicio automático de mantenimiento:
 El proyecto incluye documentación detallada:
 
 - 📖 **[README.md](README.md)** - Documentación general
-- 📧 **[SMTP_SETUP.md](docs/SMTP_SETUP.md)** - Configuración completa de emails
-- 💾 **[MULTIMEDIA_MONGODB.md](docs/MULTIMEDIA_MONGODB.md)** - Sistema de multimedia
-- 🔧 **[CHAT_STORAGE_FIX.md](docs/CHAT_STORAGE_FIX.md)** - Solución de problemas de chats
-- 🛠 **[API.md](docs/API.md)** - Documentación completa de la API
+- 🧩 **[GESTION_EMPRESARIAL.md](docs/GESTION_EMPRESARIAL.md)** - Guía de gestión empresarial
+- 🧪 **Swagger UI**: `http://localhost:5001/api/docs` (definición en `src/docs/swagger.ts`)
 
 ## 🔄 Características Avanzadas
 

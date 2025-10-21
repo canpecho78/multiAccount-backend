@@ -3,6 +3,7 @@ import { getMessagesByChat, sendMessage } from "../controllers/messageController
 import { verifyJWT } from "../middleware/auth";
 import multer from "multer";
 import { whatsappService } from "../services/whatsappService";
+import { auditAction, logAction } from "../controllers/adminController";
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage() });
@@ -79,7 +80,12 @@ router.get("/:sessionId/chats/:chatId/messages", verifyJWT, getMessagesByChat);
  *       200:
  *         description: Envío exitoso
  */
-router.post("/:sessionId/messages", verifyJWT, sendMessage);
+router.post(
+  "/:sessionId/messages",
+  verifyJWT,
+  auditAction("send", "messages"),
+  sendMessage
+);
 
 /**
  * @swagger
@@ -122,6 +128,7 @@ router.post("/:sessionId/messages", verifyJWT, sendMessage);
 router.post(
   "/:sessionId/messages/send-media",
   verifyJWT,
+  auditAction("send", "messages"),
   upload.single("media"),
   async (req, res) => {
     try {
@@ -146,7 +153,23 @@ router.post(
 
       return res.json({ success: true });
     } catch (error: any) {
-      return res.status(500).json({ success: false, error: error.message });
+      const msg = (error as Error).message || "Error";
+      // Auditoría de error
+      try {
+        const user = (req as any).user;
+        await logAction(
+          user?.sub,
+          "send",
+          "messages",
+          { sessionId: req.params.sessionId, to: (req.body as any)?.to, mediaType: (req.body as any)?.mediaType, error: msg },
+          false,
+          msg
+        );
+      } catch {}
+      if (msg.includes('Solo se permite enviar mensajes a contactos individuales')) {
+        return res.status(400).json({ success: false, error: msg });
+      }
+      return res.status(500).json({ success: false, error: msg });
     }
   }
 );

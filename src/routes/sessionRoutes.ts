@@ -3,6 +3,7 @@ import { createSession, disconnectSession, getSessions, deleteSession } from "..
 import { whatsappService } from "../services/whatsappService";
 import { Session } from "../models/Session";
 import { verifyJWT, requireRoles } from "../middleware/auth";
+import { auditAction } from "../controllers/adminController";
 
 const router = Router();
 
@@ -50,7 +51,7 @@ router.get("/", verifyJWT, getSessions);
  *       200:
  *         description: Sesión iniciada
  */
-router.post("/", verifyJWT, createSession);
+router.post("/", verifyJWT, auditAction("create", "sessions"), createSession);
 
 /**
  * @swagger
@@ -69,7 +70,7 @@ router.post("/", verifyJWT, createSession);
  *       200:
  *         description: Sesión desconectada y deshabilitada
  */
-router.post("/:sessionId/disconnect", verifyJWT, disconnectSession);
+router.post("/:sessionId/disconnect", verifyJWT, auditAction("disconnect", "sessions"), disconnectSession);
 
 /**
  * @swagger
@@ -88,7 +89,7 @@ router.post("/:sessionId/disconnect", verifyJWT, disconnectSession);
  *       200:
  *         description: Sesión eliminada
  */
-router.delete("/:sessionId", verifyJWT, deleteSession);
+router.delete("/:sessionId", verifyJWT, auditAction("delete", "sessions"), deleteSession);
 
 /**
  * @swagger
@@ -123,7 +124,7 @@ router.delete("/:sessionId", verifyJWT, deleteSession);
  *       200:
  *         description: Estado y/o QR generado
  */
-router.post("/generate-qr", verifyJWT, async (req, res) => {
+router.post("/generate-qr", verifyJWT, auditAction("generate-qr", "sessions"), async (req, res) => {
   try {
     const { sessionId, timeoutMs, force, retries, retryDelayMs } = req.body as {
       sessionId?: string;

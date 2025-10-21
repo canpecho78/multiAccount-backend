@@ -9,6 +9,8 @@ export const env = {
   authStorage: (process.env.AUTH_STORAGE || "mongo").toLowerCase() as "file" | "mongo",
   authBasePath: process.env.AUTH_BASE_PATH || "auth_info",
   jwtSecret: process.env.JWT_SECRET || "change-me-in-prod",
+  // Feature flags / behavior
+  allowGroups: String(process.env.ALLOW_GROUPS || "false").toLowerCase() === "true",
   
   // SMTP Configuration
   smtpHost: process.env.SMTP_HOST || "",

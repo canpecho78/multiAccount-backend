@@ -1,0 +1,45 @@
+Flujo de Gestión (RBAC: administrador, supervisor, empleado, guest)
+
+1) Administrador: gestión de usuarios y roles
+- Crear usuarios y asignar roles según su puesto: administrator, supervisor, empleado, guest.
+- El seed ya incluye roles por defecto en src/seed/seed.ts: administrator, guest, supervisor, empleado; y crea un usuario administrador base.
+- Acceso total a todos los endpoints del sistema.
+
+2) Supervisor: asignación y visibilidad de chats/contactos
+- Puede asignar un chat/contacto a un usuario con rol empleado para su gestión.
+  Endpoint: POST /api/sessions/{sessionId}/assignments
+  Body: { "chatId": "<jid>", "userId": "<mongoIdUsuario>" }
+  Roles: administrator, supervisor
+- Puede desasignar:
+  Endpoint: DELETE /api/sessions/{sessionId}/assignments/{assignmentId}
+  Roles: administrator, supervisor
+- Listar asignaciones de la sesión:
+  Endpoint: GET /api/sessions/{sessionId}/assignments?chatId=&userId=&active=
+- Ver asignaciones activas de un usuario específico:
+  Endpoint: GET /api/sessions/{sessionId}/assignments/user/{userId}
+- Ver sus chats asignados (para el usuario autenticado):
+  Endpoint: GET /api/sessions/{sessionId}/assignments/me
+- Importante: En la obtención de chats de una sesión, el rol empleado está limitado a sus chats asignados; el supervisor NO tiene esa restricción, por lo que puede ver todos los chats de la sesión.
+  Endpoint: GET /api/sessions/{sessionId}/chats
+
+3) Empleado: gestión de sus chats asignados
+- Puede listar y ver solo los chats que le fueron asignados (ACL aplicada en controladores):
+  Endpoint: GET /api/sessions/{sessionId}/chats?type=group|individual|all
+- Puede enviar mensajes únicamente a chats asignados:
+  Endpoint: POST /api/sessions/{sessionId}/messages { to, text }
+- Otros endpoints de chat (pin, archive, read) están disponibles y la ACL de lectura también aplica.
+
+4) Auditoría (transversal)
+- Las rutas críticas (mensajes, sesiones, chats, media) aplican auditAction() para registrar acciones exitosas y logAction() en errores, incluyendo detalles como sessionId, chatId, to, mediaType, messageId.
+- El userId se asocia desde el JWT.
+- Se sanitiza responseBody para evitar almacenar buffers y cargas grandes.
+- TTL de auditoría configurable vía AUDIT_LOG_TTL_DAYS (por defecto 90 días).
+
+5) Métricas (Observabilidad)
+- Prometheus expone /metrics (protegido) y hay contadores personalizados.
+- Descargas de media incrementan media_download_total{custom="file:<fileId>"}.
+
+Notas
+- Autenticación: JWT requerido en endpoints protegidos.
+- RBAC: requireRoles(...) en endpoints de asignaciones para limitar a administrator/supervisor.
+- ACL de negocio: controladores restringen empleados a chats exclusivamente asignados; supervisores y administradores no tienen esa restricción para lectura.

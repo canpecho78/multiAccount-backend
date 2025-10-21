@@ -2,6 +2,7 @@ import { Request, Response } from "express";
 import { Message } from "../models/Message";
 import { whatsappService } from "../services/whatsappService";
 import { Assignment } from "../models/Assignment";
+import { logAction } from "./adminController";
 
 export const getMessagesByChat = async (req: Request, res: Response) => {
   try {
@@ -36,6 +37,23 @@ export const getMessagesByChat = async (req: Request, res: Response) => {
       },
     });
   } catch (error) {
+    try {
+      const user = (req as any).user;
+      await logAction(
+        user?.sub,
+        "list",
+        "messages",
+        {
+          sessionId: req.params.sessionId,
+          chatId: req.params.chatId,
+          page: req.query.page,
+          limit: req.query.limit,
+          error: (error as Error).message,
+        },
+        false,
+        (error as Error).message
+      );
+    } catch {}
     res.status(500).json({ success: false, error: (error as Error).message });
   }
 };
@@ -57,6 +75,22 @@ export const sendMessage = async (req: Request, res: Response) => {
     await whatsappService.sendMessage(sessionId, to, text);
     res.json({ success: true });
   } catch (error) {
-    res.status(500).json({ success: false, error: (error as Error).message });
+    const msg = (error as Error).message || "Error";
+    try {
+      const user = (req as any).user;
+      await logAction(
+        user?.sub,
+        "send",
+        "messages",
+        { sessionId: req.params.sessionId, to: (req.body as any)?.to, error: msg },
+        false,
+        msg
+      );
+    } catch {}
+    // Si es error de validación (ej: destino no permitido), responder 400
+    if (msg.includes('Solo se permite enviar mensajes a contactos individuales')) {
+      return res.status(400).json({ success: false, error: msg });
+    }
+    res.status(500).json({ success: false, error: msg });
   }
 };
