@@ -23,6 +23,7 @@ import { getProfilePictureUsingSock } from "./whatsapp/profile";
 import { sendMessageUsingSock } from "./whatsapp/sendMessage";
 import { generateQrForSession } from "./whatsapp/qr";
 import { env } from "../config/env";
+import { metricsCounters } from "../metrics/metrics";
 
 // store handling moved to socketFactory
 
@@ -150,6 +151,7 @@ class WhatsAppService {
           if (!env.allowGroups && type !== 'contact') {
             // Saltar grupos u otros tipos (broadcast, status, etc.)
             this.metrics.skippedChatsNonContact++;
+            try { metricsCounters.skippedChatsNonContact.inc(); } catch {}
             continue;
           }
 
@@ -185,7 +187,11 @@ class WhatsAppService {
           const jid: string | undefined = u?.id;
           if (!jid || typeof jid !== 'string') continue;
           const type = this.getChatType(jid);
-          if (!env.allowGroups && type !== 'contact') { this.metrics.skippedChatsNonContact++; continue; }
+          if (!env.allowGroups && type !== 'contact') { 
+            this.metrics.skippedChatsNonContact++; 
+            try { metricsCounters.skippedChatsNonContact.inc(); } catch {}
+            continue; 
+          }
 
           const name = (u?.name || u?.subject) as string | undefined;
           const payload: any = { updatedAt: new Date() };
@@ -210,7 +216,11 @@ class WhatsAppService {
         const jid: string | undefined = presence?.id || presence?.jid;
         if (!jid || typeof jid !== 'string') return;
         const type = this.getChatType(jid);
-        if (!env.allowGroups && type !== 'contact') { this.metrics.skippedPresenceNonContact++; return; }
+        if (!env.allowGroups && type !== 'contact') { 
+          this.metrics.skippedPresenceNonContact++; 
+          try { metricsCounters.skippedPresenceNonContact.inc(); } catch {}
+          return; 
+        }
 
         const state = presence?.presence || presence?.status || 'unknown';
         console.log(`👀 Presence contacto ${jid}: ${state}`);
@@ -399,6 +409,7 @@ class WhatsAppService {
       const chatType = this.getChatType(from);
       if (!env.allowGroups && chatType !== 'contact') {
         this.metrics.skippedMessagesNonContact++;
+        try { metricsCounters.skippedMessagesNonContact.inc(); } catch {}
         console.log(`↩️  Omitiendo mensaje de chat no individual (${chatType}) desde ${from}`);
         return;
       }

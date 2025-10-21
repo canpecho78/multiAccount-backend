@@ -100,6 +100,26 @@ pnpm test
 - URL local: `http://localhost:5001/api/docs`
 - Especificación: OpenAPI 3.0 (`src/docs/swagger.ts`)
 
+## 📈 Métricas (Prometheus)
+
+- Endpoint: `GET http://localhost:5001/metrics`
+- Registro y contadores definidos en `src/metrics/metrics.ts`
+- Métricas personalizadas:
+  - `wa_skipped_messages_non_contact_total`
+  - `wa_skipped_chats_non_contact_total`
+  - `wa_skipped_presence_non_contact_total`
+- Para habilitar el scrape en Prometheus:
+  - Instala dependencias y levanta el backend
+  - Añade un job en tu `prometheus.yml`:
+
+```yaml
+scrape_configs:
+  - job_name: 'whatsapp-multiaccount'
+    scrape_interval: 15s
+    static_configs:
+      - targets: ['localhost:5001']
+```
+
 ## 🔧 Características Avanzadas
 
 ### Sistema de Gestión de Sesiones con MongoDB

@@ -2,6 +2,8 @@ import express from "express";
 import cors from "cors";
 import swaggerUi from "swagger-ui-express";
 import { swaggerSpec } from "./docs/swagger";
+import { metricsRegister } from "./metrics/metrics";
+import { verifyJWT, requireRoles } from "./middleware/auth";
 import sessionRoutes from "./routes/sessionRoutes";
 import chatRoutes from "./routes/chatRoutes";
 import messageRoutes from "./routes/messageRoutes";
@@ -27,6 +29,12 @@ app.get("/", (_req, res) => {
     status: "running",
     mongodb: mongoose.connection.readyState === 1 ? "connected" : "disconnected",
   });
+});
+
+// Prometheus metrics (protegido - solo administrador)
+app.get("/metrics", verifyJWT, requireRoles("administrator"), async (_req, res) => {
+  res.set("Content-Type", metricsRegister.contentType);
+  res.send(await metricsRegister.metrics());
 });
 
 // Swagger
