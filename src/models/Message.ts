@@ -5,6 +5,7 @@ const MessageSchema = new mongoose.Schema({
   messageId: { type: String, required: true },
   chatId: { type: String, required: true },
   sessionId: { type: String, required: true },
+  contactId: { type: mongoose.Schema.Types.ObjectId, ref: "Contact", default: null },
   from: { type: String, required: true },
   to: { type: String, required: true },
   body: { type: String, required: true },
@@ -49,12 +50,14 @@ const MessageSchema = new mongoose.Schema({
 // Índices para búsquedas eficientes
 MessageSchema.index({ messageId: 1 }, { unique: true });
 MessageSchema.index({ sessionId: 1, chatId: 1, timestamp: -1 });
+MessageSchema.index({ sessionId: 1, contactId: 1, timestamp: -1 });
 MessageSchema.index({ sessionId: 1, timestamp: -1 });
 
 export type MessageDoc = mongoose.Document & {
   messageId: string;
   chatId: string;
   sessionId: string;
+  contactId?: mongoose.Types.ObjectId | null;
   from: string;
   to: string;
   body: string;

@@ -31,6 +31,9 @@ const ChatSchema = new mongoose.Schema({
   
   // Última vez que el contacto estuvo en línea
   lastSeen: { type: Date, default: null },
+
+  // Referencia al contacto normalizado
+  contactId: { type: mongoose.Schema.Types.ObjectId, ref: "Contact", default: null },
 });
 
 // Índice único compuesto para evitar duplicados
@@ -38,6 +41,7 @@ ChatSchema.index({ chatId: 1, sessionId: 1 }, { unique: true });
 
 // Índice para búsquedas por sesión
 ChatSchema.index({ sessionId: 1, lastMessageTime: -1 });
+ChatSchema.index({ sessionId: 1, contactId: 1 });
 
 // Índice adicional para chats anclados
 ChatSchema.index({ sessionId: 1, isPinned: -1, lastMessageTime: -1 });
@@ -62,6 +66,9 @@ export type ChatDoc = mongoose.Document & {
   isGroup?: boolean;
   groupDescription?: string | null;
   lastSeen?: Date | null;
+
+  // Relaciones
+  contactId?: mongoose.Types.ObjectId | null;
 };
 
 export const Chat = mongoose.model<ChatDoc>("Chat", ChatSchema);

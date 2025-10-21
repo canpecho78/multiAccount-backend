@@ -47,8 +47,7 @@ const MediaSchema = new mongoose.Schema({
 });
 
 // Índices para búsquedas eficientes
-MediaSchema.index({ fileId: 1 }, { unique: true });
-MediaSchema.index({ messageId: 1 });
+// Nota: evitamos duplicar índices ya declarados a nivel de campo (fileId unique, messageId index)
 MediaSchema.index({ sessionId: 1, chatId: 1, createdAt: -1 });
 MediaSchema.index({ sessionId: 1, mediaType: 1, createdAt: -1 });
 

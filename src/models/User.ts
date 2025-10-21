@@ -78,7 +78,6 @@ const UserSchema = new Schema({
 });
 
 // Índices para búsquedas eficientes
-UserSchema.index({ email: 1 });
 UserSchema.index({ role: 1, active: 1 });
 UserSchema.index({ supervisor: 1, employeeStatus: 1 });
 UserSchema.index({ department: 1, position: 1 });

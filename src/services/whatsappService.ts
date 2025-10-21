@@ -12,6 +12,7 @@ import { Session } from "../models/Session";
 import { Chat } from "../models/Chat";
 import { Message } from "../models/Message";
 import { Media } from "../models/Media";
+import { Contact } from "../models/Contact";
 import { Server as IOServer } from "socket.io";
 import { useMongoAuthState } from "./mongoAuthState";
 import { sessionManager } from "./sessionManager";
@@ -189,6 +190,49 @@ class WhatsAppService {
         for (const msg of m.messages) {
           await this.handleIncomingMessage(sessionId, msg);
         }
+      }
+    });
+
+    // Guardar contactos (solo individuales, no grupos)
+    sock.ev.on("contacts.upsert", async (contacts: any[]) => {
+      try {
+        for (const contact of contacts) {
+          const jid: string | undefined = contact?.id;
+          if (!jid || typeof jid !== "string") continue;
+          const isGroup = jid.endsWith("@g.us");
+          if (isGroup) continue;
+
+          const name = contact.name || contact.notify || jid.split("@")[0] || "Desconocido";
+          // Upsert Contact
+          const contactDoc = await Contact.findOneAndUpdate(
+            { jid, sessionId },
+            {
+              name,
+              notify: contact.notify || null,
+              verifiedName: contact.verifiedName || null,
+              imgUrl: contact.imgUrl || null,
+              status: contact.status || null,
+              isGroup: false,
+              updatedAt: new Date(),
+            },
+            { upsert: true, new: true }
+          );
+
+          await Chat.findOneAndUpdate(
+            { chatId: jid, sessionId },
+            {
+              name,
+              phone: jid,
+              isGroup: false,
+              updatedAt: new Date(),
+              contactId: contactDoc?._id || null,
+            },
+            { upsert: true, new: true }
+          );
+        }
+        console.log("Contactos actualizados para sesión:", sessionId);
+      } catch (e) {
+        console.warn("No se pudieron actualizar contactos:", e);
       }
     });
 
@@ -539,10 +583,15 @@ class WhatsAppService {
 
       // Guardar mensaje con datos de multimedia
       try {
+        // Buscar contacto para relacionar
+        let contactDoc = null as any;
+        try { contactDoc = await Contact.findOne({ jid: from, sessionId }); } catch {}
+
         await Message.create({
           messageId,
           chatId: from,
           sessionId,
+          contactId: contactDoc?._id || null,
           from,
           to: sessionId,
           body: messageContent,
@@ -582,6 +631,10 @@ class WhatsAppService {
           console.log(`No se pudo obtener foto de perfil para ${from}`);
         }
         
+        // Intentar relacionar con Contact
+        let relatedContact = null as any;
+        try { relatedContact = await Contact.findOne({ jid: from, sessionId }); } catch {}
+
         const chat = await Chat.findOneAndUpdate(
           { chatId: from, sessionId },
           {
@@ -592,6 +645,7 @@ class WhatsAppService {
               lastMessageTime: timestamp,
               updatedAt: new Date(),
               profilePicUrl, // Agregar foto de perfil
+              contactId: relatedContact?._id || null,
             },
             $inc: { unreadCount: 1 },
             $setOnInsert: {
@@ -763,12 +817,16 @@ class WhatsAppService {
    * Enviar mensaje con multimedia desde MongoDB
    */
   async sendMessage(
-    sessionId: string, 
-    to: string, 
-    text: string, 
+    sessionId: string,
+    to: string,
+    text: string,
     options?: {
       mediaFileId?: string; // ID del archivo en MongoDB
       caption?: string;
+      mediaType?: 'image' | 'video' | 'audio' | 'document' | 'sticker' | 'voice';
+      fileBuffer?: Buffer; // Buffer directo para medio
+      filename?: string;
+      mimetype?: string;
     }
   ) {
     const session = this.sessions[sessionId];
@@ -813,15 +871,63 @@ class WhatsAppService {
       }
       
       await session.sock.sendMessage(to, mediaOptions);
+    } else if (options?.fileBuffer && options.mediaType) {
+      // Enviar usando buffer directo
+      const mediaOptions: any = { caption: options.caption || text };
+      switch (options.mediaType) {
+        case 'image':
+          mediaOptions.image = options.fileBuffer;
+          break;
+        case 'video':
+          mediaOptions.video = options.fileBuffer;
+          break;
+        case 'audio':
+        case 'voice':
+          mediaOptions.audio = options.fileBuffer;
+          mediaOptions.mimetype = options.mimetype || 'audio/mp4';
+          if (options.mediaType === 'voice') mediaOptions.ptt = true;
+          break;
+        case 'document':
+          mediaOptions.document = options.fileBuffer;
+          mediaOptions.fileName = options.filename || 'document';
+          mediaOptions.mimetype = options.mimetype || 'application/octet-stream';
+          break;
+        case 'sticker':
+          mediaOptions.sticker = options.fileBuffer;
+          break;
+      }
+      await session.sock.sendMessage(to, mediaOptions);
+
+      // Guardar el medio enviado en MongoDB
+      const mediaId = options.mediaFileId || `media_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+      await Media.create({
+        fileId: mediaId,
+        messageId,
+        sessionId,
+        chatId: to,
+        mediaType: options.mediaType === 'voice' ? 'audio' : (options.mediaType || 'document'),
+        filename: options.filename || 'unknown',
+        originalFilename: options.filename || null,
+        mimetype: options.mimetype || 'application/octet-stream',
+        size: options.fileBuffer.length,
+        data: options.fileBuffer,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
     } else {
       // Enviar solo texto
       await session.sock.sendMessage(to, { text });
     }
 
+    // Relacionar contacto en mensajes salientes
+    let toContact = null as any;
+    try { toContact = await Contact.findOne({ jid: to, sessionId }); } catch {}
+
     await Message.create({
       messageId,
       chatId: to,
       sessionId,
+      contactId: toContact?._id || null,
       from: sessionId,
       to,
       body: text,

@@ -1,8 +1,11 @@
 import { Router } from "express";
 import { getMessagesByChat, sendMessage } from "../controllers/messageController";
 import { verifyJWT } from "../middleware/auth";
+import multer from "multer";
+import { whatsappService } from "../services/whatsappService";
 
 const router = Router();
+const upload = multer({ storage: multer.memoryStorage() });
 
 /**
  * @swagger
@@ -77,5 +80,75 @@ router.get("/:sessionId/chats/:chatId/messages", verifyJWT, getMessagesByChat);
  *         description: Envío exitoso
  */
 router.post("/:sessionId/messages", verifyJWT, sendMessage);
+
+/**
+ * @swagger
+ * /api/sessions/{sessionId}/messages/send-media:
+ *   post:
+ *     tags: [Messages]
+ *     security: [{ bearerAuth: [] }]
+ *     summary: Enviar mensaje con medio (imagen, video, audio, documento, sticker)
+ *     consumes:
+ *       - multipart/form-data
+ *     parameters:
+ *       - in: path
+ *         name: sessionId
+ *         required: true
+ *         schema:
+ *           type: string
+ *       - in: formData
+ *         name: media
+ *         type: file
+ *         required: false
+ *       - in: formData
+ *         name: to
+ *         type: string
+ *         required: true
+ *       - in: formData
+ *         name: text
+ *         type: string
+ *         required: true
+ *       - in: formData
+ *         name: caption
+ *         type: string
+ *       - in: formData
+ *         name: mediaType
+ *         type: string
+ *         enum: [image, video, audio, document, sticker, voice]
+ *     responses:
+ *       200:
+ *         description: Envío exitoso
+ */
+router.post(
+  "/:sessionId/messages/send-media",
+  verifyJWT,
+  upload.single("media"),
+  async (req, res) => {
+    try {
+      const { sessionId } = req.params;
+      const { to, text, caption, mediaType } = req.body as any;
+      const file = (req as any).file as { buffer?: Buffer; originalname?: string; mimetype?: string } | undefined;
+      const fileBuffer = file?.buffer;
+      const filename = file?.originalname;
+      const mimetype = file?.mimetype;
+
+      if (!to || !text) {
+        return res.status(400).json({ success: false, error: "to y text son requeridos" });
+      }
+
+      await whatsappService.sendMessage(sessionId, to, text, {
+        fileBuffer,
+        caption,
+        mediaType,
+        filename,
+        mimetype,
+      });
+
+      return res.json({ success: true });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, error: error.message });
+    }
+  }
+);
 
 export default router;

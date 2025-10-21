@@ -14,6 +14,7 @@ import adminRoutes from "./routes/adminRoutes";
 import sessionStatsRoutes from "./routes/sessionStats";
 import mediaRoutes from "./routes/mediaRoutes";
 import employeeRoutes from "./routes/employeeRoutes";
+import contactRoutes from "./routes/contactRoutes";
 
 const app = express();
 
@@ -46,6 +47,9 @@ app.use("/api/media", mediaRoutes);
 
 // Employee routes
 app.use("/api/employee", employeeRoutes);
+
+// Contacts routes
+app.use("/api/contacts", contactRoutes);
 
 // Admin routes
 app.use("/api/admin", adminRoutes);
