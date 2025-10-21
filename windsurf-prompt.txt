@@ -1,0 +1,1919 @@
+# Prompt para Windsurf: Implementación de Backend con Baileys, MongoDB y WhatsApp Multi-Sesiones
+
+## Propósito de este Prompt
+Este prompt está diseñado para Windsurf (o herramientas similares como Cursor) para facilitar la implementación y extensión de un backend Node.js avanzado. Integra la librería Baileys para manejo de WhatsApp, MongoDB para almacenamiento de sesiones, chats, mensajes y contactos, y servicios adicionales para gestión de sesiones, limpieza automática, envío de emails y métricas. El enfoque es crear un sistema escalable para múltiples sesiones de WhatsApp con soporte para QR generation, contactos filtrados y notificaciones en tiempo real.
+
+Usa este prompt como base para generar código, refinar funcionalidades o integrar nuevos módulos. Puedes copiar y pegar secciones específicas o el prompt completo en Windsurf para obtener asistencia contextualizada.
+
+## Contexto del Proyecto
+- **Tecnologías Principales**:
+  - Node.js con TypeScript.
+  - Express.js para API REST.
+  - MongoDB con Mongoose para modelos de datos.
+  - Baileys (@whiskeysockets/baileys) para integración con WhatsApp Web.
+  - Socket.IO para notificaciones en tiempo real.
+  - Nodemailer para envío de emails.
+  - QRCode para generación de imágenes QR.
+- **Características Clave**:
+  - Gestión de múltiples sesiones de WhatsApp por `sessionId`.
+  - Generación y manejo de códigos QR para autenticación.
+  - Filtrado de contactos (solo usuarios individuales, excluyendo grupos).
+  - Almacenamiento de sesiones, chats, mensajes, medios y asignaciones en MongoDB.
+  - Servicios para limpieza automática, métricas de rendimiento y auditoría.
+  - Seguridad con roles, 2FA opcional y rate limiting.
+- **Flujo Principal**:
+  1. Crear una sesión vía POST `/generate-qr`.
+  2. Obtener QR vía GET `/qr/:sessionId`.
+  3. Mostrar QR en frontend (Next.js con TypeScript).
+  4. Una vez conectado, obtener contactos vía GET `/contacts/:sessionId`.
+  5. Manejar mensajes y notificaciones en tiempo real.
+- **Estructura de Carpetas**:
+  - `src/services/`: Servicios como WhatsAppService, SessionManager, CleanupService.
+  - `src/models/`: Modelos de Mongoose para User, Session, Chat, Message, etc.
+  - Archivo principal: `backend.ts` (servidor Express con endpoints).
+
+## Código Principal: backend.ts
+Aquí está el archivo `backend.ts` completo, que sirve como punto de entrada para el servidor. Incluye configuración de Express, conexión a MongoDB, modelos básicos, manejo de QR y contactos.
+
+```typescript
+import express from 'express';
+import mongoose from 'mongoose';
+import cors from 'cors';
+import { Boom } from '@hapi/boom';
+import makeWASocket, { DisconnectReason, useMultiFileAuthState } from '@whiskeysockets/baileys';
+import qrcode from 'qrcode';
+
+// Configuración de Express
+const app = express();
+app.use(cors());
+app.use(express.json());
+
+// Conexión a MongoDB
+const mongoURI = 'mongodb://localhost:27017/whatsapp_sessions'; // Cambia esto por tu URI
+mongoose.connect(mongoURI)
+  .then(() => console.log('Conectado a MongoDB'))
+  .catch(err => console.error('Error al conectar a MongoDB:', err));
+
+// Modelo para contactos (ajusta según tu esquema)
+const ContactSchema = new mongoose.Schema({
+  jid: { type: String, unique: true },
+  name: String,
+  notify: String,
+  verifiedName: String,
+  imgUrl: String,
+  status: String,
+  isGroup: { type: Boolean, default: false },
+  sessionId: String, // Para asociar con la sesión
+});
+const Contact = mongoose.model('Contact', ContactSchema);
+
+// Modelo para sesiones (si necesitas rastrear múltiples sesiones)
+const SessionSchema = new mongoose.Schema({
+  sessionId: { type: String, unique: true },
+  qr: String, // Para almacenar el QR temporalmente
+  connected: { type: Boolean, default: false },
+});
+const Session = mongoose.model('Session', SessionSchema);
+
+// Variables globales para manejar el socket y el estado
+let sock: any = null;
+let currentSessionId: string | null = null;
+
+// Función para iniciar la conexión de WhatsApp
+async function startWhatsAppConnection(sessionId: string) {
+  currentSessionId = sessionId;
+
+  // Crear o cargar estado de autenticación para esta sesión
+  const { state, saveCreds } = await useMultiFileAuthState(`auth_info_${sessionId}`);
+
+  sock = makeWASocket({
+    auth: state,
+    printQRInTerminal: false,
+    browser: ['MiBackend', 'Desktop', '1.0'],
+  });
+
+  // Manejar eventos de conexión
+  sock.ev.on('connection.update', async (update) => {
+    const { connection, lastDisconnect, qr } = update;
+
+    if (qr) {
+      // Generar imagen QR en base64
+      const qrImage = await qrcode.toDataURL(qr);
+      // Actualizar en la base de datos para que el frontend lo consulte
+      await Session.findOneAndUpdate(
+        { sessionId },
+        { qr: qrImage, connected: false },
+        { upsert: true }
+      );
+      console.log('QR generado para sesión:', sessionId);
+    }
+
+    if (connection === 'close') {
+      const shouldReconnect = (lastDisconnect?.error as Boom)?.output?.statusCode !== DisconnectReason.loggedOut;
+      if (shouldReconnect) {
+        console.log('Reconectando...');
+        startWhatsAppConnection(sessionId);
+      } else {
+        console.log('Sesión cerrada por logout');
+        await Session.findOneAndUpdate({ sessionId }, { connected: false });
+      }
+    } else if (connection === 'open') {
+      console.log('Conectado a WhatsApp para sesión:', sessionId);
+      await Session.findOneAndUpdate({ sessionId }, { connected: true, qr: null });
+    }
+  });
+
+  // Manejar eventos de contactos y filtrar solo contactos (no grupos)
+  sock.ev.on('contacts.upsert', async (contacts) => {
+    for (const contact of contacts) {
+      // Filtrar grupos (JIDs que terminan en @g.us)
+      if (!contact.id.endsWith('@g.us')) {
+        await Contact.findOneAndUpdate(
+          { jid: contact.id, sessionId },
+          {
+            name: contact.name,
+            notify: contact.notify,
+            verifiedName: contact.verifiedName,
+            imgUrl: contact.imgUrl,
+            status: contact.status,
+            isGroup: false,
+            sessionId,
+          },
+          { upsert: true }
+        );
+      }
+    }
+    console.log('Contactos actualizados para sesión:', sessionId);
+  });
+
+  // Guardar credenciales
+  sock.ev.on('creds.update', saveCreds);
+}
+
+// Endpoint para generar QR
+app.post('/generate-qr', async (req, res) => {
+  const { sessionId } = req.body;
+  if (!sessionId) return res.status(400).json({ error: 'sessionId requerido' });
+
+  try {
+    await startWhatsAppConnection(sessionId);
+    res.json({ message: 'Conexión iniciada. Consulta el QR en /qr/:sessionId' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Endpoint para obtener el QR de una sesión
+app.get('/qr/:sessionId', async (req, res) => {
+  const { sessionId } = req.params;
+  const session = await Session.findOne({ sessionId });
+
+  if (!session) return res.status(404).json({ error: 'Sesión no encontrada' });
+
+  if (session.qr) {
+    res.json({ qr: session.qr });
+  } else {
+    res.json({ message: 'QR no disponible o sesión conectada' });
+  }
+});
+
+// Endpoint para obtener contactos de una sesión (solo contactos, no grupos)
+app.get('/contacts/:sessionId', async (req, res) => {
+  const { sessionId } = req.params;
+  const contacts = await Contact.find({ sessionId, isGroup: false });
+
+  res.json({ contacts });
+});
+
+// Iniciar servidor
+const PORT = 3001;
+app.listen(PORT, () => console.log(`Servidor corriendo en puerto ${PORT}`));
+
+// Ejemplo de uso:
+// 1. POST /generate-qr con { "sessionId": "miSesion1" }
+// 2. GET /qr/miSesion1 para obtener el QR en base64
+// 3. En frontend, muestra <img src="data:image/png;base64,{qr}" />
+// 4. GET /contacts/miSesion1 para obtener contactos filtrados
+```
+
+## Modelos de MongoDB (src/models/)
+Aquí están todos los modelos de Mongoose utilizados en el proyecto. Estos definen la estructura de datos para usuarios, sesiones, chats, mensajes, etc.
+
+### User.ts
+```typescript
+import mongoose, { Schema } from "mongoose";
+
+const UserSchema = new Schema({
+  name: { type: String, required: true },
+  email: { type: String, required: true, unique: true, lowercase: true, index: true },
+  passwordHash: { type: String, required: true },
+  role: { type: Schema.Types.ObjectId, ref: "Role", required: true },
+
+  // Información empresarial
+  department: { type: String, default: "" },
+  position: { type: String, default: "" },
+  supervisor: { type: Schema.Types.ObjectId, ref: "User", default: null },
+
+  // Información de contacto
+  phone: { type: String, default: "" },
+  whatsappNumber: { type: String, default: "" },
+
+  // Información laboral
+  hireDate: { type: Date, default: null },
+  terminationDate: { type: Date, default: null },
+
+  // Estado del empleado
+  employeeStatus: {
+    type: String,
+    enum: ["active", "inactive", "on_leave", "terminated"],
+    default: "active"
+  },
+
+  // Configuración personal
+  timezone: { type: String, default: "America/Argentina/Buenos_Aires" },
+  language: { type: String, default: "es" },
+
+  // Métricas de rendimiento (calculadas automáticamente)
+  performance: {
+    overallScore: { type: Number, default: 0, min: 0, max: 100 },
+    lastEvaluation: { type: Date, default: null },
+    currentStreak: { type: Number, default: 0 }, // días consecutivos activos
+    totalChatsHandled: { type: Number, default: 0 },
+    averageRating: { type: Number, default: 0, min: 0, max: 5 }
+  },
+
+  // Configuración de notificaciones
+  notifications: {
+    email: { type: Boolean, default: true },
+    push: { type: Boolean, default: true },
+    sms: { type: Boolean, default: false },
+    newAssignments: { type: Boolean, default: true },
+    reminders: { type: Boolean, default: true },
+    reports: { type: Boolean, default: false }
+  },
+
+  // Límites y restricciones
+  limits: {
+    maxConcurrentChats: { type: Number, default: 10 },
+    maxDailyChats: { type: Number, default: 50 },
+    workHours: {
+      start: { type: String, default: "09:00" },
+      end: { type: String, default: "18:00" },
+      timezone: { type: String, default: "America/Argentina/Buenos_Aires" }
+    }
+  },
+
+  // Estado del sistema
+  active: { type: Boolean, default: true },
+  lastLogin: { type: Date, default: null },
+  loginCount: { type: Number, default: 0 },
+
+  // Campos para reseteo de contraseña
+  resetPasswordToken: { type: String, default: null },
+  resetPasswordExpiry: { type: Date, default: null },
+
+  // Campos para 2FA
+  twoFactorEnabled: { type: Boolean, default: false },
+  twoFactorSecret: { type: String, default: null },
+
+  createdAt: { type: Date, default: Date.now },
+  updatedAt: { type: Date, default: Date.now },
+});
+
+// Índices para búsquedas eficientes
+UserSchema.index({ email: 1 });
+UserSchema.index({ role: 1, active: 1 });
+UserSchema.index({ supervisor: 1, employeeStatus: 1 });
+UserSchema.index({ department: 1, position: 1 });
+UserSchema.index({ "performance.overallScore": -1 });
+UserSchema.index({ lastLogin: -1 });
+
+// Índice compuesto para empleados activos por supervisor
+UserSchema.index({ supervisor: 1, employeeStatus: 1, active: 1 });
+
+export type UserDoc = mongoose.Document & {
+  name: string;
+  email: string;
+  passwordHash: string;
+  role: mongoose.Types.ObjectId;
+
+  // Información empresarial
+  department?: string;
+  position?: string;
+  supervisor?: mongoose.Types.ObjectId | null;
+
+  // Información de contacto
+  phone?: string;
+  whatsappNumber?: string;
+
+  // Información laboral
+  hireDate?: Date | null;
+  terminationDate?: Date | null;
+  employeeStatus: "active" | "inactive" | "on_leave" | "terminated";
+
+  // Configuración personal
+  timezone: string;
+  language: string;
+
+  // Métricas de rendimiento
+  performance: {
+    overallScore: number;
+    lastEvaluation: Date | null;
+    currentStreak: number;
+    totalChatsHandled: number;
+    averageRating: number;
+  };
+
+  // Configuración de notificaciones
+  notifications: {
+    email: boolean;
+    push: boolean;
+    sms: boolean;
+    newAssignments: boolean;
+    reminders: boolean;
+    reports: boolean;
+  };
+
+  // Límites y restricciones
+  limits: {
+    maxConcurrentChats: number;
+    maxDailyChats: number;
+    workHours: {
+      start: string;
+      end: string;
+      timezone: string;
+    };
+  };
+
+  // Estado del sistema
+  active: boolean;
+  lastLogin: Date | null;
+  loginCount: number;
+
+  // Campos para reseteo de contraseña
+  resetPasswordToken?: string | null;
+  resetPasswordExpiry?: Date | null;
+
+  // Campos para 2FA
+  twoFactorEnabled: boolean;
+  twoFactorSecret?: string | null;
+
+  createdAt: Date;
+  updatedAt: Date;
+};
+
+export const User = mongoose.model<UserDoc>("User", UserSchema);
+```
+
+### Session.ts
+```typescript
+import mongoose from "mongoose";
+
+const SessionSchema = new mongoose.Schema({
+  sessionId: { type: String, required: true, unique: true },
+  name: { type: String, default: "Unknown" },
+  phone: { type: String, default: null },
+  isConnected: { type: Boolean, default: false },
+  lastActivity: { type: Date, default: Date.now },
+  qrCode: { type: String, default: null },
+  
+  // Metadata de control y escalabilidad
+  status: { 
+    type: String, 
+    enum: ["pending", "qr_ready", "connected", "disconnected", "error", "inactive"],
+    default: "pending" 
+  },
+  connectionAttempts: { type: Number, default: 0 },
+  lastConnectionAttempt: { type: Date, default: null },
+  lastDisconnectReason: { type: String, default: null },
+  
+  // Métricas de uso
+  messagesSent: { type: Number, default: 0 },
+  messagesReceived: { type: Number, default: 0 },
+  totalChats: { type: Number, default: 0 },
+  
+  // Control de recursos
+  memoryUsage: { type: Number, default: 0 }, // en MB
+  lastHealthCheck: { type: Date, default: Date.now },
+  isActive: { type: Boolean, default: true },
+  
+  // Metadata adicional
+  userAgent: { type: String, default: null },
+  platform: { type: String, default: null },
+  version: { type: String, default: null },
+  
+  createdAt: { type: Date, default: Date.now },
+  updatedAt: { type: Date, default: Date.now },
+});
+
+// Índices para mejorar consultas
+SessionSchema.index({ isConnected: 1, isActive: 1 });
+SessionSchema.index({ status: 1 });
+SessionSchema.index({ lastActivity: 1 });
+
+export type SessionDoc = mongoose.Document & {
+  sessionId: string;
+  name: string;
+  phone: string | null;
+  isConnected: boolean;
+  lastActivity: Date;
+  qrCode: string | null;
+  
+  // Metadata de control
+  status: "pending" | "qr_ready" | "connected" | "disconnected" | "error" | "inactive";
+  connectionAttempts: number;
+  lastConnectionAttempt: Date | null;
+  lastDisconnectReason: string | null;
+  
+  // Métricas
+  messagesSent: number;
+  messagesReceived: number;
+  totalChats: number;
+  
+  // Control de recursos
+  memoryUsage: number;
+  lastHealthCheck: Date;
+  isActive: boolean;
+  
+  // Metadata adicional
+  userAgent: string | null;
+  platform: string | null;
+  version: string | null;
+  
+  createdAt: Date;
+  updatedAt: Date;
+};
+
+export const Session = mongoose.model<SessionDoc>("Session", SessionSchema);
+```
+
+### Chat.ts
+```typescript
+import mongoose from "mongoose";
+
+const ChatSchema = new mongoose.Schema({
+  chatId: { type: String, required: true },
+  sessionId: { type: String, required: true },
+  name: { type: String, default: "Desconocido" },
+  phone: { type: String, required: true },
+  lastMessage: { type: String, default: "" },
+  lastMessageTime: { type: Date, default: Date.now },
+  unreadCount: { type: Number, default: 0 },
+  isArchived: { type: Boolean, default: false },
+  isPinned: { type: Boolean, default: false },
+  createdAt: { type: Date, default: Date.now },
+  updatedAt: { type: Date, default: Date.now },
+  
+  // ===== CAMPOS MULTIMEDIA =====
+  // URL de la foto de perfil (relativa al servidor)
+  profilePicUrl: { type: String, default: null },
+  
+  // Timestamp de última actualización de la foto
+  profilePicUpdatedAt: { type: Date, default: null },
+  
+  // Estado/biografía del contacto
+  status: { type: String, default: null },
+  
+  // Si es un grupo
+  isGroup: { type: Boolean, default: false },
+  
+  // Para grupos: descripción
+  groupDescription: { type: String, default: null },
+  
+  // Última vez que el contacto estuvo en línea
+  lastSeen: { type: Date, default: null },
+});
+
+// Índice único compuesto para evitar duplicados
+ChatSchema.index({ chatId: 1, sessionId: 1 }, { unique: true });
+
+// Índice para búsquedas por sesión
+ChatSchema.index({ sessionId: 1, lastMessageTime: -1 });
+
+// Índice adicional para chats anclados
+ChatSchema.index({ sessionId: 1, isPinned: -1, lastMessageTime: -1 });
+
+export type ChatDoc = mongoose.Document & {
+  chatId: string;
+  sessionId: string;
+  name: string;
+  phone: string;
+  lastMessage: string;
+  lastMessageTime: Date;
+  unreadCount: number;
+  isArchived: boolean;
+  isPinned: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+  
+  // Campos multimedia
+  profilePicUrl?: string | null;
+  profilePicUpdatedAt?: Date | null;
+  status?: string | null;
+  isGroup?: boolean;
+  groupDescription?: string | null;
+  lastSeen?: Date | null;
+};
+
+export const Chat = mongoose.model<ChatDoc>("Chat", ChatSchema);
+```
+
+### Message.ts
+```typescript
+import mongoose from "mongoose";
+
+const MessageSchema = new mongoose.Schema({
+  messageId: { type: String, required: true },
+  chatId: { type: String, required: true },
+  sessionId: { type: String, required: true },
+  from: { type: String, required: true },
+  to: { type: String, required: true },
+  body: { type: String, required: true },
+  fromMe: { type: Boolean, required: true },
+  timestamp: { type: Date, default: Date.now },
+  messageType: { type: String, default: "conversation" },
+  status: { type: String, enum: ["sent", "delivered", "read"], default: "sent" },
+  createdAt: { type: Date, default: Date.now },
+  
+  // ===== CAMPOS MULTIMEDIA =====
+  // URL relativa donde se guardó el archivo multimedia
+  mediaUrl: { type: String, default: null },
+  
+  // Tipo de multimedia (imageMessage, audioMessage, videoMessage, etc.)
+  mediaType: { type: String, default: null },
+  
+  // Nombre del archivo guardado
+  mediaFilename: { type: String, default: null },
+  
+  // MIME type del archivo (image/jpeg, audio/ogg, video/mp4, etc.)
+  mediaMimetype: { type: String, default: null },
+  
+  // Tamaño del archivo en bytes
+  mediaSize: { type: Number, default: null },
+  
+  // Duración para audios/videos (en segundos)
+  mediaDuration: { type: Number, default: null },
+  
+  // Para stickers y algunos documentos
+  mediaCaption: { type: String, default: null },
+  
+  // Nombre original del documento (si aplica)
+  documentName: { type: String, default: null },
+  
+  // Thumbnail/miniatura (base64 o URL)
+  mediaThumbnail: { type: String, default: null },
+  
+  // Si es nota de voz (Push To Talk)
+  isVoiceNote: { type: Boolean, default: false },
+});
+
+// Índices para búsquedas eficientes
+MessageSchema.index({ messageId: 1 }, { unique: true });
+MessageSchema.index({ sessionId: 1, chatId: 1, timestamp: -1 });
+MessageSchema.index({ sessionId: 1, timestamp: -1 });
+
+export type MessageDoc = mongoose.Document & {
+  messageId: string;
+  chatId: string;
+  sessionId: string;
+  from: string;
+  to: string;
+  body: string;
+  fromMe: boolean;
+  timestamp: Date;
+  messageType: string;
+  status: "sent" | "delivered" | "read";
+  createdAt: Date;
+  
+  // Campos multimedia
+  mediaUrl?: string | null;
+  mediaType?: string | null;
+  mediaFilename?: string | null;
+  mediaMimetype?: string | null;
+  mediaSize?: number | null;
+  mediaDuration?: number | null;
+  mediaCaption?: string | null;
+  documentName?: string | null;
+  mediaThumbnail?: string | null;
+  isVoiceNote?: boolean;
+};
+
+export const Message = mongoose.model<MessageDoc>("Message", MessageSchema);
+```
+
+### Media.ts
+```typescript
+import mongoose from "mongoose";
+
+const MediaSchema = new mongoose.Schema({
+  // Identificador único del archivo
+  fileId: { type: String, required: true, unique: true },
+  
+  // Relación con mensaje
+  messageId: { type: String, required: true, index: true },
+  sessionId: { type: String, required: true, index: true },
+  chatId: { type: String, required: true, index: true },
+  
+  // Tipo de multimedia
+  mediaType: { 
+    type: String, 
+    required: true,
+    enum: ["image", "video", "audio", "document", "sticker", "voice", "profile-pic"]
+  },
+  
+  // Datos del archivo
+  filename: { type: String, required: true },
+  originalFilename: { type: String, default: null },
+  mimetype: { type: String, required: true },
+  size: { type: Number, required: true }, // en bytes
+  
+  // Datos binarios del archivo (almacenado en MongoDB)
+  data: { type: Buffer, required: true },
+  
+  // Metadata adicional
+  width: { type: Number, default: null }, // Para imágenes/videos
+  height: { type: Number, default: null }, // Para imágenes/videos
+  duration: { type: Number, default: null }, // Para audios/videos (segundos)
+  
+  // Thumbnail/miniatura (para videos e imágenes grandes)
+  thumbnail: { type: Buffer, default: null },
+  thumbnailMimetype: { type: String, default: null },
+  
+  // Caption/descripción
+  caption: { type: String, default: null },
+  
+  // Flags especiales
+  isVoiceNote: { type: Boolean, default: false },
+  isAnimated: { type: Boolean, default: false }, // Para stickers animados
+  
+  // Timestamps
+  createdAt: { type: Date, default: Date.now },
+  updatedAt: { type: Date, default: Date.now },
+});
+
+// Índices para búsquedas eficientes
+MediaSchema.index({ fileId: 1 }, { unique: true });
+MediaSchema.index({ messageId: 1 });
+MediaSchema.index({ sessionId: 1, chatId: 1, createdAt: -1 });
+MediaSchema.index({ sessionId: 1, mediaType: 1, createdAt: -1 });
+
+export type MediaDoc = mongoose.Document & {
+  fileId: string;
+  messageId: string;
+  sessionId: string;
+  chatId: string;
+  mediaType: "image" | "video" | "audio" | "document" | "sticker" | "voice" | "profile-pic";
+  filename: string;
+  originalFilename?: string | null;
+  mimetype: string;
+  size: number;
+  data: Buffer;
+  width?: number | null;
+  height?: number | null;
+  duration?: number | null;
+  thumbnail?: Buffer | null;
+  thumbnailMimetype?: string | null;
+  caption?: string | null;
+  isVoiceNote?: boolean;
+  isAnimated?: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
+export const Media = mongoose.model<MediaDoc>("Media", MediaSchema);
+```
+
+### Assignment.ts
+```typescript
+import mongoose, { Schema } from "mongoose";
+
+const AssignmentSchema = new Schema({
+  sessionId: { type: String, required: true, index: true },
+  chatId: { type: String, required: true, index: true },
+  user: { type: Schema.Types.ObjectId, ref: "User", required: true, index: true },
+  assignedBy: { type: Schema.Types.ObjectId, ref: "User", required: true, index: true },
+
+  // Estado de la asignación
+  status: {
+    type: String,
+    enum: ["active", "completed", "pending", "rejected"],
+    default: "active",
+    index: true
+  },
+
+  // Prioridad del chat
+  priority: {
+    type: String,
+    enum: ["low", "medium", "high"],
+    default: "medium",
+    index: true
+  },
+
+  // Notas y comentarios
+  notes: { type: String, default: "" },
+  completionNotes: { type: String, default: "" },
+
+  // Timestamps importantes
+  assignedAt: { type: Date, default: Date.now },
+  completedAt: { type: Date, default: null },
+  unassignedAt: { type: Date, default: null },
+
+  // Metadata del chat asignado
+  metadata: {
+    chatName: { type: String, default: "" },
+    messageCount: { type: Number, default: 0 },
+    lastActivity: { type: Date, default: null },
+    isGroup: { type: Boolean, default: false },
+    participantCount: { type: Number, default: 0 }
+  },
+
+  // Métricas de rendimiento
+  metrics: {
+    timeToFirstResponse: { type: Number, default: null }, // minutos
+    totalResponseTime: { type: Number, default: null },   // minutos totales
+    messagesExchanged: { type: Number, default: 0 },
+    resolutionTime: { type: Number, default: null },      // minutos hasta resolución
+    satisfaction: { type: Number, default: null, min: 1, max: 5 }
+  },
+
+  // Flags adicionales
+  active: { type: Boolean, default: true },
+  escalated: { type: Boolean, default: false },
+  requiresAttention: { type: Boolean, default: false },
+  autoAssigned: { type: Boolean, default: false }
+});
+
+// Índices compuestos para búsquedas eficientes
+AssignmentSchema.index({ sessionId: 1, user: 1, status: 1 });
+AssignmentSchema.index({ assignedBy: 1, status: 1, assignedAt: -1 });
+AssignmentSchema.index({ status: 1, priority: 1, assignedAt: 1 });
+AssignmentSchema.index({ active: 1, assignedAt: -1 });
+
+// Índice único compuesto para evitar duplicados activos
+AssignmentSchema.index(
+  { sessionId: 1, chatId: 1, user: 1, active: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { active: true }
+  }
+);
+
+export type AssignmentDoc = mongoose.Document & {
+  sessionId: string;
+  chatId: string;
+  user: mongoose.Types.ObjectId;
+  assignedBy: mongoose.Types.ObjectId;
+  status: "active" | "completed" | "pending" | "rejected";
+  priority: "low" | "medium" | "high";
+  notes: string;
+  completionNotes: string;
+  assignedAt: Date;
+  completedAt: Date | null;
+  unassignedAt: Date | null;
+  metadata: {
+    chatName: string;
+    messageCount: number;
+    lastActivity: Date | null;
+    isGroup: boolean;
+    participantCount: number;
+  };
+  metrics: {
+    timeToFirstResponse: number | null;
+    totalResponseTime: number | null;
+    messagesExchanged: number;
+    resolutionTime: number | null;
+    satisfaction: number | null;
+  };
+  active: boolean;
+  escalated: boolean;
+  requiresAttention: boolean;
+  autoAssigned: boolean;
+};
+
+export const Assignment = mongoose.model<AssignmentDoc>("Assignment", AssignmentSchema);
+```
+
+### Otros Modelos (Resumidos para Brevedad)
+- **AuthState.ts**: Maneja el estado de autenticación de Baileys en MongoDB.
+- **AuthKey.ts**: Almacena claves de señal para sesiones.
+- **Role.ts**: Define roles de usuario (ej: admin, agent).
+- **AuditLog.ts**: Registra acciones de auditoría.
+- **SecuritySettings.ts**: Configuraciones globales de seguridad.
+- **AssignmentMetrics.ts**: Métricas de rendimiento por asignación.
+
+## Servicios (src/services/)
+Estos servicios manejan lógica de negocio, integración con Baileys y operaciones de base de datos.
+
+### WhatsAppService.ts
+```typescript
+import {
+  default as makeWASocket,
+  WASocket,
+  DisconnectReason,
+  ConnectionState,
+  downloadMediaMessage,
+} from "@whiskeysockets/baileys";
+import P from "pino";
+import qrcode from "qrcode";
+import { Boom } from "@hapi/boom";
+import { Session } from "../models/Session";
+import { Chat } from "../models/Chat";
+import { Message } from "../models/Message";
+import { Media } from "../models/Media";
+import { Server as IOServer } from "socket.io";
+import { useMongoAuthState } from "./mongoAuthState";
+import { sessionManager } from "./sessionManager";
+
+// Resolve Baileys makeInMemoryStore across different version layouts
+let store: any = null;
+const resolveMakeInMemoryStore = () => {
+  const candidates = [
+    () => require("@whiskeysockets/baileys").makeInMemoryStore,
+    () => require("@whiskeysockets/baileys/lib/Store").makeInMemoryStore,
+    () => require("@whiskeysockets/baileys/lib/Store/Store").makeInMemoryStore,
+    () => require("@whiskeysockets/baileys/lib/Store/index").makeInMemoryStore,
+    () => require("@whiskeysockets/baileys/lib/Utils/store").makeInMemoryStore,
+  ];
+  for (const get of candidates) {
+    try {
+      const fn = get();
+      if (typeof fn === "function") return fn;
+    } catch (_) {
+      // try next
+    }
+  }
+  return null;
+};
+
+const makeInMemoryStore = resolveMakeInMemoryStore();
+if (makeInMemoryStore) {
+  store = makeInMemoryStore({ logger: P({ level: "silent" }) });
+}
+
+export interface SessionData {
+  sock: WASocket;
+  isConnected: boolean;
+  lastSeen: Date;
+}
+
+class WhatsAppService {
+  private sessions: Record<string, SessionData> = {};
+  private io?: IOServer;
+
+  setSocket(io: IOServer) {
+    this.io = io;
+  }
+
+  getSession(sessionId: string) {
+    return this.sessions[sessionId];
+  }
+
+  getAllSessions() {
+    return this.sessions;
+  }
+
+  async initializeExistingSessions() {
+    const existingSessions = await Session.find({});
+    for (const session of existingSessions) {
+      try {
+        await this.createSession(session.sessionId);
+      } catch (err) {
+        console.error("Error initializing session", session.sessionId, err);
+      }
+    }
+  }
+
+  async createSession(sessionId: string) {
+    const existingSession = this.sessions[sessionId];
+    if (existingSession?.sock) {
+      console.log(`Sesión ${sessionId} ya existe`);
+      return existingSession.sock;
+    }
+
+    const { state, saveCreds } = await useMongoAuthState(sessionId);
+    const sock = makeWASocket({
+      auth: state,
+      printQRInTerminal: false,
+      logger: P({ level: "silent" }),
+    });
+
+    // Manejar conexión
+    sock.ev.on("connection.update", async (update) => {
+      const { connection, lastDisconnect, qr } = update;
+      if (qr && !this.sessions[sessionId]?.isConnected) {
+        // Generar QR como imagen base64
+        try {
+          const qrImage = await qrcode.toDataURL(qr);
+          await sessionManager.createOrUpdateSession(sessionId, {
+            qrCode: qrImage,
+            status: "qr_ready",
+          });
+          this.io?.emit("qr-code", { sessionId, qr: qrImage });
+        } catch (err) {
+          console.error("Error generando QR", err);
+        }
+      }
+
+      if (connection === "close") {
+        const shouldReconnect =
+          (lastDisconnect?.error instanceof Boom &&
+            lastDisconnect.error.output.statusCode !==
+              DisconnectReason.loggedOut) ||
+          !lastDisconnect;
+
+        if (shouldReconnect) {
+          await sessionManager.updateConnectionStatus(
+            sessionId,
+            false,
+            "disconnected",
+            {
+              phone: this.sessions[sessionId]?.sock?.user?.id?.split(":")[0],
+            }
+          );
+          console.log(`Reconectando sesión ${sessionId}`);
+          setTimeout(() => this.createSession(sessionId), 5000);
+        } else {
+          await sessionManager.markAsInactive(
+            sessionId,
+            lastDisconnect?.error?.message || "Logged out"
+          );
+          delete this.sessions[sessionId];
+          this.io?.emit("session-disconnected", { sessionId });
+        }
+      } else if (connection === "open") {
+        this.sessions[sessionId] = {
+          sock,
+          isConnected: true,
+          lastSeen: new Date(),
+        };
+
+        await sessionManager.updateConnectionStatus(
+          sessionId,
+          true,
+          "connected",
+          {
+            phone: sock.user?.id?.split(":")[0],
+            name: sock.user?.name,
+            platform: sock.user?.notify || "whatsapp",
+            version: sock.user?.phone?.wa_version || "unknown",
+          }
+        );
+
+        this.io?.emit("session-connected", { sessionId, phone: sock.user?.id });
+        console.log(`Sesión ${sessionId} conectada`);
+      }
+    });
+
+    // Manejar mensajes entrantes
+    sock.ev.on("messages.upsert", async (m) => {
+      const msg = m.messages[0];
+      if (!msg.key.fromMe && m.type === "notify") {
+        await this.handleIncomingMessage(sessionId, msg);
+      }
+    });
+
+    // Manejar cambios en chats
+    sock.ev.on("chats.upsert", async (chats) => {
+      for (const chat of chats) {
+        await Chat.findOneAndUpdate(
+          { chatId: chat.id, sessionId },
+          {
+            name: chat.name || chat.notify,
+            isGroup: chat.id.endsWith("@g.us"),
+            updatedAt: new Date(),
+          },
+          { upsert: true }
+        );
+      }
+    });
+
+    // Manejar cambios en contactos
+    sock.ev.on("contacts.upsert", async (contacts) => {
+      for (const contact of contacts) {
+        await Chat.findOneAndUpdate(
+          { chatId: contact.id, sessionId },
+          {
+            name: contact.name || contact.notify,
+            phone: contact.id.split("@")[0],
+            updatedAt: new Date(),
+          },
+          { upsert: true }
+        );
+      }
+    });
+
+    return sock;
+  }
+
+  private async handleIncomingMessage(sessionId: string, msg: any) {
+    const from = msg.key.remoteJid!;
+    const messageId = msg.key.id!;
+    const body = msg.message?.conversation || msg.message?.extendedTextMessage?.text || "";
+
+    await Message.create({
+      messageId,
+      chatId: from,
+      sessionId,
+      from,
+      to: msg.key.participant || from,
+      body,
+      fromMe: false,
+      timestamp: new Date(msg.messageTimestamp * 1000),
+      status: "delivered",
+    });
+
+    await sessionManager.incrementMessageCount(sessionId, "received");
+
+    await Chat.findOneAndUpdate(
+      { chatId: from, sessionId },
+      { lastMessage: body, lastMessageTime: new Date(), updatedAt: new Date() },
+      { upsert: true }
+    );
+
+    this.io?.emit("message-received", { sessionId, from, body, messageId });
+  }
+
+  async sendMessage(
+    sessionId: string,
+    to: string,
+    text: string,
+    options?: {
+      mediaFileId?: string;
+      caption?: string;
+    }
+  ) {
+    const session = this.sessions[sessionId];
+    if (!session || !session.isConnected) {
+      throw new Error(`Sesión ${sessionId} no está conectada`);
+    }
+
+    const messageId = `${Date.now()}-${Math.random()}`;
+
+    if (options?.mediaFileId) {
+      const mediaDoc = await Media.findOne({ fileId: options.mediaFileId });
+      if (!mediaDoc) {
+        throw new Error(`Media file not found: ${options.mediaFileId}`);
+      }
+
+      const buffer = mediaDoc.data;
+      const mediaOptions: any = {};
+      
+      switch (mediaDoc.mediaType) {
+        case "image":
+          mediaOptions.image = buffer;
+          mediaOptions.caption = options.caption || text;
+          break;
+        case "video":
+          mediaOptions.video = buffer;
+          mediaOptions.caption = options.caption || text;
+          break;
+        case "audio":
+        case "voice":
+          mediaOptions.audio = buffer;
+          mediaOptions.mimetype = mediaDoc.mimetype;
+          mediaOptions.ptt = mediaDoc.isVoiceNote;
+          break;
+        case "document":
+          mediaOptions.document = buffer;
+          mediaOptions.fileName = mediaDoc.originalFilename || mediaDoc.filename;
+          mediaOptions.mimetype = mediaDoc.mimetype;
+          break;
+        case "sticker":
+          mediaOptions.sticker = buffer;
+          break;
+      }
+      
+      await session.sock.sendMessage(to, mediaOptions);
+    } else {
+      // Enviar solo texto
+      await session.sock.sendMessage(to, { text });
+    }
+
+    await Message.create({
+      messageId,
+      chatId: to,
+      sessionId,
+      from: sessionId,
+      to,
+      body: text,
+      fromMe: true,
+      timestamp: new Date(),
+      status: "sent",
+      mediaUrl: options?.mediaFileId || null,
+    });
+
+    // Incrementar contador de mensajes enviados
+    await sessionManager.incrementMessageCount(sessionId, "sent");
+
+    await Chat.findOneAndUpdate(
+      { chatId: to, sessionId },
+      { lastMessage: text, lastMessageTime: new Date(), updatedAt: new Date() },
+      { upsert: true }
+    );
+
+    this.io?.emit("message-sent", { sessionId, to, text, messageId });
+  }
+
+  async disconnectSession(sessionId: string) {
+    const s = this.sessions[sessionId];
+    if (!s) return;
+    await s.sock.logout();
+    delete this.sessions[sessionId];
+    await sessionManager.markAsInactive(sessionId, "Manual disconnect");
+  }
+}
+
+export const whatsappService = new WhatsAppService();
+```
+
+### SessionManager.ts
+```typescript
+import { Session, SessionDoc } from "../models/Session";
+import { AuthState } from "../models/AuthState";
+import { AuthKey } from "../models/AuthKey";
+import { Chat } from "../models/Chat";
+import { Message } from "../models/Message";
+import { Assignment } from "../models/Assignment";
+
+/**
+ * SessionManager - Servicio centralizado para gestión de sesiones en MongoDB
+ * Proporciona control completo y escalabilidad para múltiples sesiones de WhatsApp
+ */
+export class SessionManager {
+  /**
+   * Crear o actualizar una sesión en la base de datos
+   */
+  async createOrUpdateSession(
+    sessionId: string,
+    data: Partial<SessionDoc>
+  ): Promise<SessionDoc> {
+    const session = await Session.findOneAndUpdate(
+      { sessionId },
+      {
+        ...data,
+        sessionId,
+        updatedAt: new Date(),
+        lastActivity: new Date(),
+      },
+      { upsert: true, new: true }
+    );
+    return session;
+  }
+
+  /**
+   * Obtener una sesión por ID
+   */
+  async getSession(sessionId: string): Promise<SessionDoc | null> {
+    return await Session.findOne({ sessionId });
+  }
+
+  /**
+   * Obtener todas las sesiones activas
+   */
+  async getActiveSessions(): Promise<SessionDoc[]> {
+    return await Session.find({ isActive: true }).sort({ lastActivity: -1 });
+  }
+
+  /**
+   * Obtener sesiones conectadas
+   */
+  async getConnectedSessions(): Promise<SessionDoc[]> {
+    return await Session.find({ isConnected: true, isActive: true });
+  }
+
+  /**
+   * Actualizar estado de conexión
+   */
+  async updateConnectionStatus(
+    sessionId: string,
+    isConnected: boolean,
+    status: SessionDoc["status"],
+    metadata?: {
+      phone?: string;
+      name?: string;
+      platform?: string;
+      version?: string;
+    }
+  ): Promise<void> {
+    const updateData: any = {
+      isConnected,
+      status,
+      lastActivity: new Date(),
+      updatedAt: new Date(),
+    };
+
+    if (isConnected) {
+      updateData.connectionAttempts = 0;
+      updateData.lastDisconnectReason = null;
+      updateData.qrCode = null;
+    }
+
+    if (metadata) {
+      if (metadata.phone) updateData.phone = metadata.phone;
+      if (metadata.name) updateData.name = metadata.name;
+      if (metadata.platform) updateData.platform = metadata.platform;
+      if (metadata.version) updateData.version = metadata.version;
+    }
+
+    await Session.findOneAndUpdate({ sessionId }, updateData);
+  }
+
+  /**
+   * Marcar sesión como inactiva
+   */
+  async markAsInactive(sessionId: string, reason?: string): Promise<void> {
+    await Session.findOneAndUpdate(
+      { sessionId },
+      {
+        isActive: false,
+        isConnected: false,
+        status: "inactive",
+        lastDisconnectReason: reason,
+        updatedAt: new Date(),
+      }
+    );
+  }
+
+  /**
+   * Incrementar contador de mensajes
+   */
+  async incrementMessageCount(
+    sessionId: string,
+    type: "sent" | "received"
+  ): Promise<void> {
+    const field = type === "sent" ? "messagesSent" : "messagesReceived";
+    await Session.findOneAndUpdate(
+      { sessionId },
+      { $inc: { [field]: 1 }, updatedAt: new Date() }
+    );
+  }
+
+  /**
+   * Eliminar sesión completamente
+   */
+  async deleteSession(sessionId: string): Promise<void> {
+    // Eliminar datos relacionados
+    await Promise.all([
+      Session.deleteOne({ sessionId }),
+      AuthState.deleteOne({ sessionId }),
+      AuthKey.deleteMany({ sessionId }),
+      Chat.deleteMany({ sessionId }),
+      Message.deleteMany({ sessionId }),
+      Assignment.deleteMany({ sessionId }),
+    ]);
+  }
+
+  /**
+   * Limpiar sesiones inactivas
+   */
+  async cleanupInactiveSessions(daysInactive: number = 30): Promise<number> {
+    const cutoffDate = new Date();
+    cutoffDate.setDate(cutoffDate.getDate() - daysInactive);
+
+    const inactiveSessions = await Session.find({
+      lastActivity: { $lt: cutoffDate },
+      isConnected: false,
+    });
+
+    let deletedCount = 0;
+    for (const session of inactiveSessions) {
+      await this.deleteSession(session.sessionId);
+      deletedCount++;
+    }
+
+    return deletedCount;
+  }
+
+  /**
+   * Obtener estadísticas generales
+   */
+  async getStatistics(): Promise<{
+    total: number;
+    active: number;
+    connected: number;
+    disconnected: number;
+    pending: number;
+    totalMessages: number;
+    totalChats: number;
+  }> {
+    const [
+      total,
+      active,
+      connected,
+      disconnected,
+      pending,
+      totalMessages,
+      totalChats,
+    ] = await Promise.all([
+      Session.countDocuments({}),
+      Session.countDocuments({ isActive: true }),
+      Session.countDocuments({ isConnected: true }),
+      Session.countDocuments({ status: "disconnected" }),
+      Session.countDocuments({ status: "pending" }),
+      Message.countDocuments({}),
+      Chat.countDocuments({}),
+    ]);
+
+    return {
+      total,
+      active,
+      connected,
+      disconnected,
+      pending,
+      totalMessages,
+      totalChats,
+    };
+  }
+
+  /**
+   * Obtener sesiones que necesitan atención (muchos intentos fallidos)
+   */
+  async getProblematicSessions(
+    minAttempts: number = 5
+  ): Promise<SessionDoc[]> {
+    return await Session.find({
+      connectionAttempts: { $gte: minAttempts },
+      isActive: true,
+    }).sort({ connectionAttempts: -1 });
+  }
+
+  /**
+   * Resetear intentos de conexión
+   */
+  async resetConnectionAttempts(sessionId: string): Promise<void> {
+    await Session.findOneAndUpdate(
+      { sessionId },
+      {
+        connectionAttempts: 0,
+        lastDisconnectReason: null,
+        updatedAt: new Date(),
+      }
+    );
+  }
+}
+
+export const sessionManager = new SessionManager();
+```
+
+### CleanupService.ts
+```typescript
+import { sessionManager } from "./sessionManager";
+import { whatsappService } from "./whatsappService";
+
+/**
+ * CleanupService - Servicio para limpieza automática y mantenimiento de sesiones
+ * Ejecuta tareas periódicas de limpieza y optimización
+ */
+export class CleanupService {
+  private cleanupInterval: NodeJS.Timeout | null = null;
+  private healthCheckInterval: NodeJS.Timeout | null = null;
+
+  /**
+   * Iniciar servicio de limpieza automática
+   */
+  start() {
+    console.log("🧹 Iniciando servicio de limpieza automática...");
+
+    // Limpieza de sesiones inactivas cada 6 horas
+    this.cleanupInterval = setInterval(
+      async () => {
+        await this.cleanupInactiveSessions();
+      },
+      6 * 60 * 60 * 1000
+    ); // 6 horas
+
+    // Health check cada 5 minutos
+    this.healthCheckInterval = setInterval(
+      async () => {
+        await this.performHealthCheck();
+      },
+      5 * 60 * 1000
+    ); // 5 minutos
+
+    console.log("✅ Servicio de limpieza iniciado correctamente");
+  }
+
+  /**
+   * Detener servicio de limpieza
+   */
+  stop() {
+    if (this.cleanupInterval) {
+      clearInterval(this.cleanupInterval);
+      this.cleanupInterval = null;
+    }
+    if (this.healthCheckInterval) {
+      clearInterval(this.healthCheckInterval);
+      this.healthCheckInterval = null;
+    }
+    console.log("🛑 Servicio de limpieza detenido");
+  }
+
+  /**
+   * Limpiar sesiones inactivas
+   */
+  private async cleanupInactiveSessions() {
+    try {
+      console.log("🧹 Ejecutando limpieza de sesiones inactivas...");
+
+      // Limpiar sesiones con más de 30 días de inactividad
+      const deletedCount = await sessionManager.cleanupInactiveSessions(30);
+
+      if (deletedCount > 0) {
+        console.log(`✅ Limpiadas ${deletedCount} sesiones inactivas`);
+      } else {
+        console.log("✅ No hay sesiones inactivas para limpiar");
+      }
+    } catch (error) {
+      console.error("❌ Error en limpieza de sesiones:", error);
+    }
+  }
+
+  /**
+   * Realizar health check de sesiones activas
+   */
+  private async performHealthCheck() {
+    try {
+      const stats = await sessionManager.getStatistics();
+      const problematicSessions = await sessionManager.getProblematicSessions(3);
+
+      console.log(`🔍 Health check: ${stats.total} sesiones total, ${stats.connected} conectadas`);
+
+      if (problematicSessions.length > 0) {
+        console.warn(`⚠️ Sesiones problemáticas detectadas: ${problematicSessions.length}`);
+        for (const session of problematicSessions) {
+          console.warn(`- ${session.sessionId}: ${session.connectionAttempts} intentos`);
+        }
+      }
+    } catch (error) {
+      console.error("❌ Error en health check:", error);
+    }
+  }
+
+  /**
+   * Ejecutar limpieza manual inmediata
+   */
+  async runManualCleanup(daysInactive: number = 30): Promise<number> {
+    console.log(`🧹 Ejecutando limpieza manual (${daysInactive} días)...`);
+    const deletedCount = await sessionManager.cleanupInactiveSessions(
+      daysInactive
+    );
+    console.log(`✅ Limpiadas ${deletedCount} sesiones`);
+    return deletedCount;
+  }
+
+  /**
+   * Obtener reporte de salud del sistema
+   */
+  async getHealthReport(): Promise<{
+    totalSessions: number;
+    activeSessions: number;
+    connectedSessions: number;
+    problematicSessions: number;
+    memoryUsage: {
+      total: number;
+      perSession: number;
+    };
+    uptime: number;
+  }> {
+    const stats = await sessionManager.getStatistics();
+    const problematicSessions = await sessionManager.getProblematicSessions(3);
+    const sessions = whatsappService.getAllSessions();
+
+    const memoryUsage = process.memoryUsage();
+    const totalMemoryMB = memoryUsage.heapUsed / 1024 / 1024;
+    const sessionCount = Object.keys(sessions).length || 1;
+
+    return {
+      totalSessions: stats.total,
+      activeSessions: stats.active,
+      connectedSessions: stats.connected,
+      problematicSessions: problematicSessions.length,
+      memoryUsage: {
+        total: Math.round(totalMemoryMB * 100) / 100,
+        perSession: Math.round((totalMemoryMB / sessionCount) * 100) / 100,
+      },
+      uptime: process.uptime(),
+    };
+  }
+
+  /**
+   * Resetear sesiones problemáticas
+   */
+  async resetProblematicSessions(minAttempts: number = 5): Promise<number> {
+    const problematic = await sessionManager.getProblematicSessions(
+      minAttempts
+    );
+    let resetCount = 0;
+
+    for (const session of problematic) {
+      await sessionManager.resetConnectionAttempts(session.sessionId);
+      resetCount++;
+      console.log(
+        `🔄 Reseteados intentos de conexión para: ${session.sessionId}` 
+      );
+    }
+
+    return resetCount;
+  }
+}
+
+export const cleanupService = new CleanupService();
+```
+
+### EmailService.ts
+```typescript
+import nodemailer from "nodemailer";
+import { env } from "../config/env";
+
+/**
+ * EmailService - Servicio para envío de emails
+ */
+class EmailService {
+  private transporter: nodemailer.Transporter | null = null;
+
+  /**
+   * Inicializar transporter de nodemailer
+   */
+  private async getTransporter() {
+    if (this.transporter) {
+      return this.transporter;
+    }
+
+    // Verificar que las credenciales SMTP estén configuradas
+    if (!env.smtpHost || !env.smtpPort || !env.smtpUser || !env.smtpPass) {
+      console.warn("⚠️ SMTP no configurado. Los emails no se enviarán.");
+      return null;
+    }
+
+    try {
+      this.transporter = nodemailer.createTransporter({
+        host: env.smtpHost,
+        port: env.smtpPort,
+        secure: env.smtpSecure, // true para 465, false para otros puertos
+        auth: {
+          user: env.smtpUser,
+          pass: env.smtpPass,
+        },
+      });
+
+      // Verificar conexión
+      await this.transporter.verify();
+      console.log("✅ SMTP configurado correctamente");
+
+      return this.transporter;
+    } catch (error) {
+      console.error("❌ Error configurando SMTP:", error);
+      this.transporter = null;
+      return null;
+    }
+  }
+
+  /**
+   * Enviar email de reseteo de contraseña
+   */
+  async sendPasswordResetEmail(
+    to: string,
+    resetToken: string,
+    userName?: string
+  ): Promise<boolean> {
+    const transporter = await this.getTransporter();
+    if (!transporter) {
+      console.warn(`⚠️ No se pudo enviar email a ${to} (SMTP no configurado)`);
+      return false;
+    }
+
+    try {
+      const resetUrl = `${env.frontendUrl}/reset-password?token=${resetToken}`;
+      const expiryMinutes = 60; // 1 hora
+
+      const mailOptions = {
+        from: `"${env.smtpFromName}" <${env.smtpFromEmail}>`,
+        to,
+        subject: "Resetear Contraseña - WhatsApp Multi-Sesiones",
+        html: `
+          <!DOCTYPE html>
+          <html>
+          <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>Resetear Contraseña</title>
+            <style>
+              body { font-family: Arial, sans-serif; margin: 0; padding: 20px; background-color: #f4f4f4; }
+              .container { max-width: 600px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
+              .button { display: inline-block; padding: 12px 24px; background-color: #007bff; color: white; text-decoration: none; border-radius: 4px; margin: 20px 0; }
+              .footer { margin-top: 20px; padding-top: 20px; border-top: 1px solid #eee; color: #666; font-size: 12px; }
+            </style>
+          </head>
+          <body>
+            <div class="container">
+              <h1 style="color: #007bff;">🔐 Resetear Contraseña</h1>
+              <p>Hola${userName ? ` ${userName}` : ""},</p>
+              <p>Hemos recibido una solicitud para resetear tu contraseña. Haz clic en el botón abajo para proceder:</p>
+              <a href="${resetUrl}" class="button">Resetear Contraseña</a>
+              <p>Este enlace expira en ${expiryMinutes} minutos.</p>
+              <p>Si no solicitaste este cambio, ignora este email.</p>
+              <div class="footer">
+                Este es un email automático, por favor no respondas.
+              </div>
+            </div>
+          </body>
+          </html>
+        `,
+        text: `
+Hola${userName ? ` ${userName}` : ""},
+
+Hemos recibido una solicitud para resetear tu contraseña. Usa el siguiente enlace para proceder:
+
+${resetUrl}
+
+Este enlace expira en ${expiryMinutes} minutos.
+
+Si no solicitaste este cambio, ignora este email.
+
+---
+Este es un email automático, por favor no respondas.
+        `,
+      };
+
+      await transporter.sendMail(mailOptions);
+      console.log(`✅ Email de reseteo enviado a ${to}`);
+      return true;
+    } catch (error) {
+      console.error(`❌ Error enviando email a ${to}:`, error);
+      return false;
+    }
+  }
+
+  /**
+   * Enviar email de notificación
+   */
+  async sendNotificationEmail(
+    to: string,
+    subject: string,
+    message: string,
+    userName?: string
+  ): Promise<boolean> {
+    const transporter = await this.getTransporter();
+    if (!transporter) {
+      console.warn(`⚠️ No se pudo enviar email a ${to} (SMTP no configurado)`);
+      return false;
+    }
+
+    try {
+      const mailOptions = {
+        from: `"${env.smtpFromName}" <${env.smtpFromEmail}>`,
+        to,
+        subject,
+        html: `
+          <!DOCTYPE html>
+          <html>
+          <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <style>
+              body { font-family: Arial, sans-serif; margin: 0; padding: 20px; background-color: #f4f4f4; }
+              .container { max-width: 600px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
+              .footer { margin-top: 20px; padding-top: 20px; border-top: 1px solid #eee; color: #666; font-size: 12px; }
+            </style>
+          </head>
+          <body>
+            <div class="container">
+              <h1>Notificación</h1>
+              <p>Hola${userName ? ` ${userName}` : ""},</p>
+              <p>${message}</p>
+              <div class="footer">
+                Este es un email automático, por favor no respondas.
+              </div>
+            </div>
+          </body>
+          </html>
+        `,
+        text: `Hola${userName ? ` ${userName}` : ""},\n\n${message}\n\n---\nEste es un email automático, por favor no respondas.`,
+      };
+
+      await transporter.sendMail(mailOptions);
+      console.log(`✅ Email de notificación enviado a ${to}`);
+      return true;
+    } catch (error) {
+      console.error(`❌ Error enviando email a ${to}:`, error);
+      return false;
+    }
+  }
+
+  /**
+   * Enviar email de contraseña temporal
+   */
+  async sendTemporaryPasswordEmail(
+    to: string,
+    temporaryPassword: string,
+    userName?: string
+  ): Promise<boolean> {
+    const transporter = await this.getTransporter();
+    if (!transporter) {
+      console.warn(`⚠️ No se pudo enviar email a ${to} (SMTP no configurado)`);
+      return false;
+    }
+
+    try {
+      const mailOptions = {
+        from: `"${env.smtpFromName}" <${env.smtpFromEmail}>`,
+        to,
+        subject: "Contraseña Temporal - WhatsApp Multi-Sesiones",
+        html: `
+          <!DOCTYPE html>
+          <html>
+          <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <style>
+              body { font-family: Arial, sans-serif; margin: 0; padding: 20px; background-color: #f4f4f4; }
+              .container { max-width: 600px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
+              .password-box { background-color: #f8d7da; border-left: 4px solid #dc3545; padding: 10px; margin: 15px 0; }
+              .warning { background-color: #fff3cd; border-left: 4px solid #ffc107; padding: 10px; margin: 15px 0; }
+              .footer { margin-top: 20px; padding-top: 20px; border-top: 1px solid #eee; color: #666; font-size: 12px; }
+            </style>
+          </head>
+          <body>
+            <div class="container">
+              <h1 style="color: #ffc107;">🔑 Contraseña Temporal</h1>
+              <p>Hola${userName ? ` ${userName}` : ""},</p>
+              <p>El administrador ha reseteado tu contraseña. Tu nueva contraseña temporal es:</p>
+              <div class="password-box">
+                <div class="password">${temporaryPassword}</div>
+              </div>
+              <div class="warning">
+                <strong>⚠️ Importante:</strong>
+                <ul style="margin: 5px 0; padding-left: 20px;">
+                  <li>Esta es una contraseña temporal</li>
+                  <li>Debes cambiarla inmediatamente después de iniciar sesión</li>
+                  <li>No compartas esta contraseña con nadie</li>
+                </ul>
+              </div>
+              <p>Para cambiar tu contraseña, inicia sesión y ve a tu perfil.</p>
+              <div class="footer">
+                Este es un email automático, por favor no respondas.
+              </div>
+            </div>
+          </body>
+          </html>
+        `,
+        text: `
+Hola${userName ? ` ${userName}` : ""},
+
+El administrador ha reseteado tu contraseña. Tu nueva contraseña temporal es:
+
+${temporaryPassword}
+
+IMPORTANTE:
+- Esta es una contraseña temporal
+- Debes cambiarla inmediatamente después de iniciar sesión
+- No compartas esta contraseña con nadie
+
+Para cambiar tu contraseña, inicia sesión y ve a tu perfil.
+
+---
+Este es un email automático, por favor no respondas.
+        `,
+      };
+
+      await transporter.sendMail(mailOptions);
+      console.log(`✅ Email de contraseña temporal enviado a ${to}`);
+      return true;
+    } catch (error) {
+      console.error(`❌ Error enviando email a ${to}:`, error);
+      return false;
+    }
+  }
+}
+
+export const emailService = new EmailService();
+```
+
+### mongoAuthState.ts
+```typescript
+import { initAuthCreds, type SignalDataTypeMap } from "@whiskeysockets/baileys";
+import { AuthState } from "../models/AuthState";
+import { AuthKey } from "../models/AuthKey";
+
+/**
+ * Convertir datos de MongoDB Binary a Buffer para Baileys
+ */
+function fixBinaryData(obj: any): any {
+  if (obj === null || obj === undefined) return obj;
+  
+  // Si es un Binary de MongoDB, convertir a Buffer
+  // MongoDB Binary tiene una propiedad 'buffer' que es un Uint8Array
+  if (obj && typeof obj === "object" && obj.constructor?.name === "Binary") {
+    return Buffer.from(obj.buffer || obj);
+  }
+  
+  // Si es un Uint8Array, convertir a Buffer
+  if (obj instanceof Uint8Array) {
+    return Buffer.from(obj);
+  }
+  
+  // Si es un objeto, procesar recursivamente
+  if (typeof obj === "object") {
+    if (Array.isArray(obj)) {
+      return obj.map(fixBinaryData);
+    }
+    
+    const fixed: any = {};
+    for (const key in obj) {
+      fixed[key] = fixBinaryData(obj[key]);
+    }
+    return fixed;
+  }
+  
+  return obj;
+}
+
+export async function useMongoAuthState(sessionId: string) {
+  // Load or initialize creds
+  let auth = await AuthState.findOne({ sessionId }).lean();
+  let creds = auth?.creds as any;
+  if (!creds) {
+    creds = initAuthCreds();
+    await AuthState.findOneAndUpdate(
+      { sessionId },
+      { sessionId, creds, updatedAt: new Date() },
+      { upsert: true, new: true }
+    );
+  } else {
+    // Convertir Binary a Buffer
+    creds = fixBinaryData(creds);
+  }
+
+  const writeKey = async (type: keyof SignalDataTypeMap, id: string, value: any) => {
+    await AuthKey.findOneAndUpdate(
+      { sessionId, type, id },
+      { sessionId, type, id, value, updatedAt: new Date() },
+      { upsert: true, new: true }
+    );
+  };
+
+  const readKeys = async (type: keyof SignalDataTypeMap, ids: string[]) => {
+    const result: { [key: string]: any } = {};
+    if (!ids?.length) return result;
+
+    const docs = await AuthKey.find({ sessionId, type, id: { $in: ids } }).lean();
+    for (const doc of docs) {
+      // Convertir Binary a Buffer antes de devolver
+      result[doc.id] = fixBinaryData(doc.value);
+    }
+    return result;
+  };
+
+  const delKeys = async (type: keyof SignalDataTypeMap, ids: string[]) => {
+    if (!ids?.length) return;
+    await AuthKey.deleteMany({ sessionId, type, id: { $in: ids } });
+  };
+
+  const state = {
+    creds,
+    keys: {
+      get: async <T extends keyof SignalDataTypeMap>(type: T, ids: string[]) => {
+        return readKeys(type, ids);
+      },
+      set: async (data: any) => {
+        const tasks: Promise<any>[] = [];
+        for (const type of Object.keys(data) as (keyof SignalDataTypeMap)[]) {
+          const entries = data[type];
+          for (const id of Object.keys(entries)) {
+            const value = entries[id];
+            tasks.push(writeKey(type, id, value));
+          }
+        }
+        await Promise.all(tasks);
+      },
+      // Optional: clear support
+      clear: async () => {
+        await AuthKey.deleteMany({ sessionId });
+      },
+      // Optional: delete specific keys
+      remove: async (type: keyof SignalDataTypeMap, ids: string[]) => {
+        await delKeys(type, ids);
+      },
+    },
+  } as any;
+
+  const saveCreds = async () => {
+    await AuthState.findOneAndUpdate(
+      { sessionId },
+      { sessionId, creds: state.creds, updatedAt: new Date() },
+      { upsert: true }
+    );
+  };
+
+  return { state, saveCreds };
+}
+```
+
+## Instrucciones para Usar en Windsurf
+1. **Copia el Prompt**: Pega todo este texto en la interfaz de Windsurf como un prompt inicial o consulta.
+2. **Especifica Tareas**: Agrega detalles como "Implementa el endpoint para envío de mensajes" o "Integra Socket.IO para notificaciones".
+3. **Personaliza**: Ajusta variables como `mongoURI` o agrega nuevas funcionalidades basadas en los modelos.
+4. **Ejecuta y Prueba**: Usa el código generado para probar en tu entorno (Node.js con TS).
+5. **Itera**: Si necesitas cambios, refina el prompt con más contexto.
+
+Este prompt proporciona un contexto completo para que Windsurf genere código preciso y escalable. ¡Si necesitas agregar más secciones o ejemplos, avísame!

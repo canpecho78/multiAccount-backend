@@ -31,6 +31,26 @@ export class SessionManager {
   }
 
   /**
+   * Limpiar credenciales/keys de autenticación para forzar un nuevo emparejamiento (QR fresco)
+   */
+  async clearAuth(sessionId: string): Promise<void> {
+    await AuthKey.deleteMany({ sessionId });
+    await AuthState.deleteOne({ sessionId });
+    await Session.findOneAndUpdate(
+      { sessionId },
+      {
+        status: "pending",
+        isActive: true,
+        isConnected: false,
+        qrCode: null,
+        updatedAt: new Date(),
+        lastDisconnectReason: null,
+        connectionAttempts: 0,
+      }
+    );
+  }
+
+  /**
    * Obtener una sesión por ID
    */
   async getSession(sessionId: string): Promise<SessionDoc | null> {

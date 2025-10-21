@@ -3,7 +3,7 @@ import dotenv from "dotenv";
 dotenv.config();
 
 export const env = {
-  port: parseInt(process.env.PORT || "5000", 10),
+  port: parseInt(process.env.PORT || "5001", 10),
   mongodbUri: process.env.MONGODB_URI || "mongodb://localhost:27017/whatsapp-multi-session",
   nodeEnv: process.env.NODE_ENV || "development",
   authStorage: (process.env.AUTH_STORAGE || "mongo").toLowerCase() as "file" | "mongo",

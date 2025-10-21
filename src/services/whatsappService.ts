@@ -76,10 +76,26 @@ class WhatsAppService {
   }
 
   async createSession(sessionId: string) {
-    // Registrar sesión en MongoDB
+    // Forzar desconexión de sesión existente si existe
+    const existingSession = this.sessions[sessionId];
+    if (existingSession?.sock) {
+      console.log(`Desconectando sesión existente ${sessionId}`);
+      try {
+        await existingSession.sock.logout();
+      } catch (err: any) {
+        // Evitar crash si la conexión ya estaba cerrada
+        console.warn(`Advertencia al hacer logout de ${sessionId}: ${err?.message || err}`);
+      } finally {
+        delete this.sessions[sessionId];
+      }
+    }
+
+    // Limpiar estado de autenticación para forzar nuevo QR
     await sessionManager.createOrUpdateSession(sessionId, {
       status: "pending",
       isActive: true,
+      qrCode: null, // Limpiar QR existente
+      isConnected: false,
     } as any);
 
     const { state, saveCreds } = await useMongoAuthState(sessionId);
@@ -87,14 +103,18 @@ class WhatsAppService {
     const sock = makeWASocket({
       auth: state,
       printQRInTerminal: false,
+      logger: P({ level: "silent" }),
+      // Opciones adicionales para v7
       connectTimeoutMs: 60000,
       defaultQueryTimeoutMs: 0,
       keepAliveIntervalMs: 10000,
       emitOwnEvents: true,
       syncFullHistory: false,
+      // Forzar nuevo pairing
+      shouldIgnoreJid: () => false,
     });
 
-    // Bind global store to this socket's event emitter (if available)
+    // Bind global store
     if (store) {
       store.bind(sock.ev);
     }
@@ -110,11 +130,13 @@ class WhatsAppService {
 
       if (qr) {
         try {
+          // Generar QR fresco cada vez
           const qrImage = await qrcode.toDataURL(qr);
           await sessionManager.updateQRCode(sessionId, qrImage);
           this.io?.emit("qr", { sessionId, qr: qrImage });
+          console.log(`QR generado para sesión ${sessionId}`);
         } catch (err) {
-          console.error("Error generating QR", err);
+          console.error("Error generando QR", err);
           await sessionManager.recordConnectionAttempt(sessionId, false, "QR generation failed");
         }
       }
@@ -122,40 +144,39 @@ class WhatsAppService {
       if (connection === "open") {
         this.sessions[sessionId].isConnected = true;
         this.sessions[sessionId].lastSeen = new Date();
-        
-        // Obtener información del dispositivo
+
         const phone = sock.user?.id?.split(":")[0] || null;
         const name = sock.user?.name || "Unknown";
-        
+
         await sessionManager.updateConnectionStatus(sessionId, true, "connected", {
           phone: phone || undefined,
           name,
           platform: "whatsapp",
         });
-        
+
         this.io?.emit("connected", { sessionId, status: true });
-        
-        // Preload SOLO chats individuales (no grupos) - más recientes
+
+        // Preload chats
         await this.loadExistingChats(sessionId, sock, {
           type: "individual",
           limit: Number(process.env.PRELOAD_CHATS_LIMIT || 30),
         });
-        
-        // Actualizar conteo de chats
+
         await sessionManager.updateChatCount(sessionId);
       } else if (connection === "close") {
         const shouldReconnect = (lastDisconnect?.error as Boom)?.output?.statusCode !== DisconnectReason.loggedOut;
         const reason = (lastDisconnect?.error as any)?.message || "Connection closed";
-        
+
         this.sessions[sessionId].isConnected = false;
-        
+
         await sessionManager.updateConnectionStatus(sessionId, false, "disconnected");
         await sessionManager.recordConnectionAttempt(sessionId, false, reason);
-        
+
         this.io?.emit("connected", { sessionId, status: false });
 
         if (shouldReconnect) {
-          setTimeout(() => this.createSession(sessionId), 5000);
+          console.log(`Reconectando sesión ${sessionId} en 5 segundos`);
+          setTimeout(() => this.createSession(sessionId), 5001);
         } else {
           delete this.sessions[sessionId];
           await sessionManager.markAsInactive(sessionId, "Logged out");
@@ -174,6 +195,97 @@ class WhatsAppService {
     sock.ev.on("creds.update", saveCreds);
 
     return sock;
+  }
+
+  /**
+   * Iniciar sesión (si no existe) y esperar a que se genere un QR en la base de datos.
+   * Devuelve el QR en base64 o el estado si ya está conectada.
+   */
+  async generateQrForSession(
+    sessionId: string,
+    opts?: { timeoutMs?: number; pollMs?: number; force?: boolean; retries?: number; retryDelayMs?: number }
+  ): Promise<{ status: "qr_ready" | "connected" | "pending" | "disconnected" | "error"; qr?: string | null }>
+  {
+    const timeoutMs = Math.max(3000, opts?.timeoutMs ?? 20000);
+    const pollMs = Math.max(200, opts?.pollMs ?? 500);
+    const retries = Math.max(0, opts?.retries ?? 1);
+    const retryDelayMs = Math.max(0, opts?.retryDelayMs ?? 1500);
+
+    // Pre-chequeo rápido: si ya hay QR o ya está conectada y no se forzó
+    try {
+      const existingDoc = await Session.findOne({ sessionId }).lean();
+      if (existingDoc?.isConnected) {
+        return { status: "connected" };
+      }
+      if (existingDoc?.qrCode && !opts?.force) {
+        return { status: "qr_ready", qr: existingDoc.qrCode };
+      }
+      // Si la sesión está en estado problemático, forzar limpieza para nuevo QR
+      if (existingDoc && ["inactive", "disconnected", "error"].includes(existingDoc.status as any)) {
+        opts = { ...opts, force: true };
+      }
+    } catch {}
+
+    let attempt = 0;
+    while (true) {
+      // Forzar limpieza si se solicita
+      if (opts?.force) {
+        const existing = this.sessions[sessionId];
+        if (existing?.sock) {
+          try { await existing.sock.logout(); } catch {}
+          delete this.sessions[sessionId];
+        }
+      }
+
+      // Limpiar credenciales si se fuerza o si venimos de estado problemático
+      if (opts?.force) {
+        try { await sessionManager.clearAuth(sessionId); } catch {}
+      }
+
+      // Asegurar documento de sesión en DB y arrancar socket
+      await sessionManager.createOrUpdateSession(sessionId, {
+        status: "pending",
+        isActive: true,
+        isConnected: false,
+        qrCode: null,
+      } as any);
+
+      // Crear socket (forzando QR fresco) si no está en memoria o no conectada
+      const s = this.sessions[sessionId];
+      if (!s || !s.isConnected || opts?.force) {
+        await this.createSession(sessionId);
+      }
+
+      const start = Date.now();
+      while (Date.now() - start < timeoutMs) {
+        const doc = await Session.findOne({ sessionId }).lean();
+        if (doc?.isConnected) {
+          return { status: "connected" };
+        }
+        if (doc?.qrCode) {
+          return { status: "qr_ready", qr: doc.qrCode };
+        }
+        if (doc?.status === "disconnected" || doc?.status === "error") {
+          return { status: (doc.status as any) };
+        }
+        await new Promise((r) => setTimeout(r, pollMs));
+      }
+
+      // Timeout sin QR disponible -> ¿reintentar?
+      if (attempt < retries) {
+        attempt++;
+        await new Promise((r) => setTimeout(r, retryDelayMs));
+        // En reintento, forzamos nuevo QR
+        opts = { ...opts, force: true };
+        continue;
+      }
+
+      const latest = await Session.findOne({ sessionId }).lean();
+      return {
+        status: (latest?.status as any) || "pending",
+        qr: latest?.qrCode || null,
+      };
+    }
   }
 
   /**

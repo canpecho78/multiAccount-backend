@@ -7,31 +7,30 @@ import { AuthKey } from "../models/AuthKey";
  */
 function fixBinaryData(obj: any): any {
   if (obj === null || obj === undefined) return obj;
-  
+
   // Si es un Binary de MongoDB, convertir a Buffer
-  // MongoDB Binary tiene una propiedad 'buffer' que es un Uint8Array
   if (obj && typeof obj === "object" && obj.constructor?.name === "Binary") {
     return Buffer.from(obj.buffer || obj);
   }
-  
+
   // Si es un Uint8Array, convertir a Buffer
   if (obj instanceof Uint8Array) {
     return Buffer.from(obj);
   }
-  
+
   // Si es un objeto, procesar recursivamente
   if (typeof obj === "object") {
     if (Array.isArray(obj)) {
       return obj.map(fixBinaryData);
     }
-    
+
     const fixed: any = {};
     for (const key in obj) {
       fixed[key] = fixBinaryData(obj[key]);
     }
     return fixed;
   }
-  
+
   return obj;
 }
 
@@ -52,52 +51,68 @@ export async function useMongoAuthState(sessionId: string) {
   }
 
   const writeKey = async (type: keyof SignalDataTypeMap, id: string, value: any) => {
-    await AuthKey.findOneAndUpdate(
-      { sessionId, type, id },
-      { sessionId, type, id, value, updatedAt: new Date() },
-      { upsert: true, new: true }
-    );
+    try {
+      await AuthKey.findOneAndUpdate(
+        { sessionId, type, id },
+        { sessionId, type, id, value, updatedAt: new Date() },
+        { upsert: true, new: true }
+      );
+    } catch (error) {
+      console.error(`Error writing key ${type}:${id}`, error);
+    }
   };
 
   const readKeys = async (type: keyof SignalDataTypeMap, ids: string[]) => {
     const result: { [key: string]: any } = {};
     if (!ids?.length) return result;
 
-    const docs = await AuthKey.find({ sessionId, type, id: { $in: ids } }).lean();
-    for (const doc of docs) {
-      // Convertir Binary a Buffer antes de devolver
-      result[doc.id] = fixBinaryData(doc.value);
+    try {
+      const docs = await AuthKey.find({ sessionId, type, id: { $in: ids } }).lean();
+      for (const doc of docs) {
+        // Convertir Binary a Buffer antes de devolver
+        result[doc.id] = fixBinaryData(doc.value);
+      }
+    } catch (error) {
+      console.error(`Error reading keys ${type}`, error);
     }
     return result;
   };
 
   const delKeys = async (type: keyof SignalDataTypeMap, ids: string[]) => {
     if (!ids?.length) return;
-    await AuthKey.deleteMany({ sessionId, type, id: { $in: ids } });
+    try {
+      await AuthKey.deleteMany({ sessionId, type, id: { $in: ids } });
+    } catch (error) {
+      console.error(`Error deleting keys ${type}`, error);
+    }
   };
 
   const state = {
     creds,
     keys: {
       get: async <T extends keyof SignalDataTypeMap>(type: T, ids: string[]) => {
-        return readKeys(type, ids);
+        return await readKeys(type, ids);
       },
       set: async (data: any) => {
         const tasks: Promise<any>[] = [];
         for (const type of Object.keys(data) as (keyof SignalDataTypeMap)[]) {
           const entries = data[type];
-          for (const id of Object.keys(entries)) {
-            const value = entries[id];
-            tasks.push(writeKey(type, id, value));
+          if (entries) {
+            for (const id of Object.keys(entries)) {
+              const value = entries[id];
+              tasks.push(writeKey(type, id, value));
+            }
           }
         }
         await Promise.all(tasks);
       },
-      // Optional: clear support
       clear: async () => {
-        await AuthKey.deleteMany({ sessionId });
+        try {
+          await AuthKey.deleteMany({ sessionId });
+        } catch (error) {
+          console.error("Error clearing keys", error);
+        }
       },
-      // Optional: delete specific keys
       remove: async (type: keyof SignalDataTypeMap, ids: string[]) => {
         await delKeys(type, ids);
       },
@@ -105,11 +120,15 @@ export async function useMongoAuthState(sessionId: string) {
   } as any;
 
   const saveCreds = async () => {
-    await AuthState.findOneAndUpdate(
-      { sessionId },
-      { sessionId, creds: state.creds, updatedAt: new Date() },
-      { upsert: true }
-    );
+    try {
+      await AuthState.findOneAndUpdate(
+        { sessionId },
+        { sessionId, creds: state.creds, updatedAt: new Date() },
+        { upsert: true }
+      );
+    } catch (error) {
+      console.error("Error saving creds", error);
+    }
   };
 
   return { state, saveCreds };

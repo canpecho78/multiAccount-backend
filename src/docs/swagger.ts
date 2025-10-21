@@ -11,7 +11,7 @@ export const swaggerSpec = swaggerJSDoc({
       description: "API para gestionar múltiples sesiones de WhatsApp con MongoDB y Socket.IO",
     },
     servers: [
-      { url: "http://localhost:5000", description: "Local" },
+      { url: "http://localhost:5001", description: "Local" },
     ],
     tags: [
       { name: "Auth", description: "Autenticación" },

@@ -1,5 +1,7 @@
 import { Router } from "express";
 import { createSession, disconnectSession, getSessions, deleteSession } from "../controllers/sessionController";
+import { whatsappService } from "../services/whatsappService";
+import { Session } from "../models/Session";
 import { verifyJWT, requireRoles } from "../middleware/auth";
 
 const router = Router();
@@ -87,5 +89,65 @@ router.post("/:sessionId/disconnect", verifyJWT, disconnectSession);
  *         description: Sesión eliminada
  */
 router.delete("/:sessionId", verifyJWT, deleteSession);
+
+/**
+ * @swagger
+ * /api/sessions/generate-qr:
+ *   post:
+ *     tags: [Sessions]
+ *     security: [{ bearerAuth: [] }]
+ *     summary: Generar un QR fresco para una sesión (crea la sesión si no existe)
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               sessionId:
+ *                 type: string
+ *                 example: "mi-sesion-1"
+ *               timeoutMs:
+ *                 type: number
+ *                 example: 30000
+ *               force:
+ *                 type: boolean
+ *                 example: false
+ *               retries:
+ *                 type: number
+ *                 example: 1
+ *               retryDelayMs:
+ *                 type: number
+ *                 example: 1500
+ *     responses:
+ *       200:
+ *         description: Estado y/o QR generado
+ */
+router.post("/generate-qr", verifyJWT, async (req, res) => {
+  try {
+    const { sessionId, timeoutMs, force, retries, retryDelayMs } = req.body as {
+      sessionId?: string;
+      timeoutMs?: number;
+      force?: boolean;
+      retries?: number;
+      retryDelayMs?: number;
+    };
+    if (!sessionId) {
+      return res.status(400).json({ success: false, error: "sessionId requerido" });
+    }
+
+    // Asegurar documento y no duplicar
+    await Session.findOneAndUpdate(
+      { sessionId },
+      { sessionId, isActive: true, updatedAt: new Date() },
+      { upsert: true, new: true }
+    );
+
+    const result = await whatsappService.generateQrForSession(sessionId, { timeoutMs, force, retries, retryDelayMs });
+    return res.json({ success: true, ...result, sessionId });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, error: error.message });
+  }
+});
 
 export default router;

@@ -22,7 +22,7 @@ async function bootstrap() {
     setTimeout(() => whatsappService.initializeExistingSessions(), 2000);
     
     // Iniciar servicio de limpieza automática
-    setTimeout(() => cleanupService.start(), 5000);
+    setTimeout(() => cleanupService.start(), 5001);
   });
 
   // Manejo de cierre graceful
