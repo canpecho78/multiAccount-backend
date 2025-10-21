@@ -21,7 +21,7 @@ export const login = async (req: Request, res: Response) => {
     const roleName = (user.role as any)?.name || "guest";
     const token = jwt.sign({ sub: user.id, role: roleName, name: user.name, email: user.email }, env.jwtSecret, { expiresIn: "12h" });
 
-    res.json({ success: true, data: { token, user: { id: user.id, name: user.name, email: user.email, role: roleName } } });
+    res.json({ success: true, data: { token}});
   } catch (error) {
     res.status(500).json({ success: false, error: (error as Error).message });
   }

@@ -224,6 +224,19 @@ export const auditAction = (action: string, resource: string) => {
 
     res.json = function(data: any) {
       // Registrar acción exitosa
+      let safeBody: any = data;
+      try {
+        if (Buffer.isBuffer(data)) {
+          safeBody = "[omitted: buffer]";
+        } else if (typeof data === "string" && data.length > 1000) {
+          safeBody = "[omitted: long string]";
+        } else if (typeof data === "object" && data !== null) {
+          const str = JSON.stringify(data);
+          safeBody = str.length > 2000 ? "[omitted: large object]" : data;
+        }
+      } catch {
+        safeBody = "[omitted: unserializable]";
+      }
       AuditLog.create({
         userId: authUser?.sub,
         action,
@@ -233,7 +246,8 @@ export const auditAction = (action: string, resource: string) => {
           method: req.method,
           url: req.originalUrl,
           body: req.body,
-          responseStatus: res.statusCode
+          responseStatus: res.statusCode,
+          responseBody: safeBody
         },
         ipAddress: req.ip,
         userAgent: req.get('User-Agent'),

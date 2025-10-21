@@ -2,6 +2,7 @@ import { Request, Response } from "express";
 import { Session } from "../models/Session";
 import { whatsappService } from "../services/whatsappService";
 import { sessionManager } from "../services/sessionManager";
+import { logAction } from "./adminController";
 
 export const getSessions = async (req: Request, res: Response) => {
   try {
@@ -16,6 +17,17 @@ export const getSessions = async (req: Request, res: Response) => {
 
     res.json({ success: true, data: sessionsWithStatus });
   } catch (error) {
+    try {
+      const user = (req as any).user;
+      await logAction(
+        user?.sub,
+        "list",
+        "sessions",
+        { error: (error as Error).message },
+        false,
+        (error as Error).message
+      );
+    } catch {}
     res.status(500).json({ success: false, error: (error as Error).message });
   }
 };
@@ -44,6 +56,17 @@ export const createSession = async (req: Request, res: Response) => {
 
     res.json({ success: true, message: "Sesión iniciada" });
   } catch (error) {
+    try {
+      const user = (req as any).user;
+      await logAction(
+        user?.sub,
+        "create",
+        "sessions",
+        { sessionId: (req.body as any)?.sessionId, name: (req.body as any)?.name, phone: (req.body as any)?.phone, error: (error as Error).message },
+        false,
+        (error as Error).message
+      );
+    } catch {}
     res.status(500).json({ success: false, error: (error as Error).message });
   }
 };
@@ -76,6 +99,17 @@ export const disconnectSession = async (req: Request, res: Response) => {
 
     res.json({ success: true, message: "Sesión desconectada y deshabilitada" });
   } catch (error) {
+    try {
+      const user = (req as any).user;
+      await logAction(
+        user?.sub,
+        "disconnect",
+        "sessions",
+        { sessionId: req.params.sessionId, error: (error as Error).message },
+        false,
+        (error as Error).message
+      );
+    } catch {}
     res.status(500).json({ success: false, error: (error as Error).message });
   }
 };
@@ -100,6 +134,17 @@ export const deleteSession = async (req: Request, res: Response) => {
 
     res.json({ success: true, message: "Sesión eliminada completamente" });
   } catch (error) {
+    try {
+      const user = (req as any).user;
+      await logAction(
+        user?.sub,
+        "delete",
+        "sessions",
+        { sessionId: req.params.sessionId, error: (error as Error).message },
+        false,
+        (error as Error).message
+      );
+    } catch {}
     res.status(500).json({ success: false, error: (error as Error).message });
   }
 };

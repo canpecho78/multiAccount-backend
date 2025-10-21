@@ -1,6 +1,9 @@
 import { Router } from "express";
 import { Media } from "../models/Media";
 import { verifyJWT } from "../middleware/auth";
+import { auditAction, logAction } from "../controllers/adminController";
+import { withAudit } from "../middleware/withAudit";
+import { metricsCounters } from "../metrics/metrics";
 
 const router = Router();
 
@@ -24,17 +27,15 @@ const router = Router();
  *       404:
  *         description: Archivo no encontrado
  */
-router.get("/:fileId", verifyJWT, async (req, res) => {
+router.get("/:fileId", verifyJWT, auditAction("download", "media"), async (req, res) => {
   try {
     const { fileId } = req.params;
 
     const media = await Media.findOne({ fileId });
 
     if (!media) {
-      return res.status(404).json({
-        success: false,
-        error: "Media file not found",
-      });
+      res.status(404).json({ success: false, error: "Media file not found" });
+      return;
     }
 
     // Establecer headers apropiados
@@ -46,12 +47,14 @@ router.get("/:fileId", verifyJWT, async (req, res) => {
     });
 
     // Enviar el buffer
+    try { metricsCounters.mediaDownloadTotal.labels({ custom: `file:${fileId}` }).inc(); } catch {}
     res.send(media.data);
   } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: (error as Error).message,
-    });
+    try {
+      const user = (req as any).user;
+      await logAction(user?.sub, "download", "media", { fileId: req.params.fileId, error: (error as Error).message }, false, (error as Error).message);
+    } catch {}
+    res.status(500).json({ success: false, error: (error as Error).message });
   }
 });
 
@@ -73,7 +76,7 @@ router.get("/:fileId", verifyJWT, async (req, res) => {
  *       200:
  *         description: Archivo descargado
  */
-router.get("/:fileId/download", verifyJWT, async (req, res) => {
+router.get("/:fileId/download", verifyJWT, auditAction("download", "media"), async (req, res) => {
   try {
     const { fileId } = req.params;
 
@@ -120,17 +123,16 @@ router.get("/:fileId/download", verifyJWT, async (req, res) => {
  *       200:
  *         description: Información del archivo
  */
-router.get("/:fileId/info", verifyJWT, async (req, res) => {
-  try {
+router.get(
+  "/:fileId/info",
+  verifyJWT,
+  withAudit("info", "media", async (req, res) => {
     const { fileId } = req.params;
 
     const media = await Media.findOne({ fileId }).select("-data -thumbnail");
-
     if (!media) {
-      return res.status(404).json({
-        success: false,
-        error: "Media file not found",
-      });
+      res.status(404).json({ success: false, error: "Media file not found" });
+      return;
     }
 
     res.json({
@@ -154,13 +156,8 @@ router.get("/:fileId/info", verifyJWT, async (req, res) => {
         createdAt: media.createdAt,
       },
     });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: (error as Error).message,
-    });
-  }
-});
+  }, (req) => ({ fileId: req.params.fileId }))
+);
 
 /**
  * @swagger
@@ -195,10 +192,12 @@ router.get("/:fileId/info", verifyJWT, async (req, res) => {
  *       200:
  *         description: Lista de archivos
  */
-router.get("/session/:sessionId", verifyJWT, async (req, res) => {
-  try {
+router.get(
+  "/session/:sessionId",
+  verifyJWT,
+  withAudit("list", "media", async (req, res) => {
     const { sessionId } = req.params;
-    const { mediaType, page = 1, limit = 20 } = req.query;
+    const { mediaType, page = 1, limit = 20 } = req.query as any;
 
     const filter: any = { sessionId };
     if (mediaType) {
@@ -226,13 +225,8 @@ router.get("/session/:sessionId", verifyJWT, async (req, res) => {
         totalPages: Math.ceil(total / Number(limit)),
       },
     });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: (error as Error).message,
-    });
-  }
-});
+  }, (req) => ({ sessionId: req.params.sessionId, mediaType: req.query.mediaType, page: req.query.page, limit: req.query.limit }))
+);
 
 /**
  * @swagger

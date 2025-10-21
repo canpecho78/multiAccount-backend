@@ -2,6 +2,7 @@ import { Request, Response } from "express";
 import { Chat } from "../models/Chat";
 import { Assignment } from "../models/Assignment";
 import { Message } from "../models/Message";
+import { logAction } from "./adminController";
 
 export const getChatsBySession = async (req: Request, res: Response) => {
   try {
@@ -82,6 +83,17 @@ export const getChatsBySession = async (req: Request, res: Response) => {
       },
     });
   } catch (error) {
+    try {
+      const user = (req as any).user;
+      await logAction(
+        user?.sub,
+        "list",
+        "chats",
+        { sessionId: req.params.sessionId, page: req.query.page, limit: req.query.limit, type: req.query.type, error: (error as Error).message },
+        false,
+        (error as Error).message
+      );
+    } catch {}
     res.status(500).json({ success: false, error: (error as Error).message });
   }
 };
@@ -114,6 +126,17 @@ export const togglePinChat = async (req: Request, res: Response) => {
       data: chat 
     });
   } catch (error) {
+    try {
+      const user = (req as any).user;
+      await logAction(
+        user?.sub,
+        "pin",
+        "chats",
+        { sessionId: req.params.sessionId, chatId: req.params.chatId, isPinned: (req.body as any)?.isPinned, error: (error as Error).message },
+        false,
+        (error as Error).message
+      );
+    } catch {}
     res.status(500).json({ success: false, error: (error as Error).message });
   }
 };
@@ -146,6 +169,17 @@ export const toggleArchiveChat = async (req: Request, res: Response) => {
       data: chat 
     });
   } catch (error) {
+    try {
+      const user = (req as any).user;
+      await logAction(
+        user?.sub,
+        "archive",
+        "chats",
+        { sessionId: req.params.sessionId, chatId: req.params.chatId, isArchived: (req.body as any)?.isArchived, error: (error as Error).message },
+        false,
+        (error as Error).message
+      );
+    } catch {}
     res.status(500).json({ success: false, error: (error as Error).message });
   }
 };

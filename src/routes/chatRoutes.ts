@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { getChatsBySession, togglePinChat, toggleArchiveChat, markChatAsRead } from "../controllers/chatController";
 import { verifyJWT } from "../middleware/auth";
+import { auditAction } from "../controllers/adminController";
 
 const router = Router();
 
@@ -80,7 +81,7 @@ router.get("/:sessionId/chats", verifyJWT, getChatsBySession);
  *       200:
  *         description: Chat actualizado
  */
-router.patch("/:sessionId/chats/:chatId/pin", verifyJWT, togglePinChat);
+router.patch("/:sessionId/chats/:chatId/pin", verifyJWT, auditAction("pin", "chats"), togglePinChat);
 
 /**
  * @swagger
@@ -113,7 +114,7 @@ router.patch("/:sessionId/chats/:chatId/pin", verifyJWT, togglePinChat);
  *       200:
  *         description: Chat actualizado
  */
-router.patch("/:sessionId/chats/:chatId/archive", verifyJWT, toggleArchiveChat);
+router.patch("/:sessionId/chats/:chatId/archive", verifyJWT, auditAction("archive", "chats"), toggleArchiveChat);
 
 /**
  * @swagger
@@ -137,6 +138,6 @@ router.patch("/:sessionId/chats/:chatId/archive", verifyJWT, toggleArchiveChat);
  *       200:
  *         description: Chat marcado como leído
  */
-router.patch("/:sessionId/chats/:chatId/read", verifyJWT, markChatAsRead);
+router.patch("/:sessionId/chats/:chatId/read", verifyJWT, auditAction("read", "chats"), markChatAsRead);
 
 export default router;

@@ -20,6 +20,11 @@ AuditLogSchema.index({ action: 1, timestamp: -1 });
 AuditLogSchema.index({ resource: 1, timestamp: -1 });
 AuditLogSchema.index({ timestamp: -1 });
 
+// TTL configurable para retención de auditoría (por defecto 90 días)
+const AUDIT_TTL_DAYS = Number(process.env.AUDIT_LOG_TTL_DAYS || 90);
+const AUDIT_TTL_SECONDS = Math.max(1, Math.floor(AUDIT_TTL_DAYS * 24 * 60 * 60));
+AuditLogSchema.index({ timestamp: 1 }, { expireAfterSeconds: AUDIT_TTL_SECONDS });
+
 export type AuditLogDoc = mongoose.Document & {
   userId: mongoose.Types.ObjectId;
   action: string;

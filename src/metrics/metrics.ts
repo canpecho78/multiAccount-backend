@@ -23,9 +23,15 @@ export const metricsCounters = {
     help: "Total de eventos de presencia omitidos por no ser de contacto individual",
     labelNames: ["custom"],
   }),
+  mediaDownloadTotal: new Counter({
+    name: "media_download_total",
+    help: "Total de descargas de archivos multimedia servidos por la API",
+    labelNames: ["custom"],
+  }),
 };
 
 // Register custom counters
 metricsRegister.registerMetric(metricsCounters.skippedMessagesNonContact);
 metricsRegister.registerMetric(metricsCounters.skippedChatsNonContact);
 metricsRegister.registerMetric(metricsCounters.skippedPresenceNonContact);
+metricsRegister.registerMetric(metricsCounters.mediaDownloadTotal);
