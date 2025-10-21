@@ -146,7 +146,11 @@ router.post(
 
       return res.json({ success: true });
     } catch (error: any) {
-      return res.status(500).json({ success: false, error: error.message });
+      const msg = (error as Error).message || "Error";
+      if (msg.includes('Solo se permite enviar mensajes a contactos individuales')) {
+        return res.status(400).json({ success: false, error: msg });
+      }
+      return res.status(500).json({ success: false, error: msg });
     }
   }
 );

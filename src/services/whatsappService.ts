@@ -22,6 +22,7 @@ import { bindConnectionHandlers } from "./whatsapp/events/connection";
 import { getProfilePictureUsingSock } from "./whatsapp/profile";
 import { sendMessageUsingSock } from "./whatsapp/sendMessage";
 import { generateQrForSession } from "./whatsapp/qr";
+import { env } from "../config/env";
 
 // store handling moved to socketFactory
 
@@ -34,6 +35,11 @@ export interface SessionData {
 class WhatsAppService {
   private sessions: Record<string, SessionData> = {};
   private io?: IOServer;
+  private metrics = {
+    skippedMessagesNonContact: 0,
+    skippedChatsNonContact: 0,
+    skippedPresenceNonContact: 0,
+  };
 
   setSocket(io: IOServer) {
     this.io = io;
@@ -141,8 +147,9 @@ class WhatsAppService {
           const jid: string | undefined = chat?.id;
           if (!jid || typeof jid !== 'string') continue;
           const type = this.getChatType(jid);
-          if (type !== 'contact') {
+          if (!env.allowGroups && type !== 'contact') {
             // Saltar grupos u otros tipos (broadcast, status, etc.)
+            this.metrics.skippedChatsNonContact++;
             continue;
           }
 
@@ -178,7 +185,7 @@ class WhatsAppService {
           const jid: string | undefined = u?.id;
           if (!jid || typeof jid !== 'string') continue;
           const type = this.getChatType(jid);
-          if (type !== 'contact') continue;
+          if (!env.allowGroups && type !== 'contact') { this.metrics.skippedChatsNonContact++; continue; }
 
           const name = (u?.name || u?.subject) as string | undefined;
           const payload: any = { updatedAt: new Date() };
@@ -203,7 +210,7 @@ class WhatsAppService {
         const jid: string | undefined = presence?.id || presence?.jid;
         if (!jid || typeof jid !== 'string') return;
         const type = this.getChatType(jid);
-        if (type !== 'contact') return;
+        if (!env.allowGroups && type !== 'contact') { this.metrics.skippedPresenceNonContact++; return; }
 
         const state = presence?.presence || presence?.status || 'unknown';
         console.log(`👀 Presence contacto ${jid}: ${state}`);
@@ -390,7 +397,8 @@ class WhatsAppService {
 
       // Filtrar grupos: solo procesamos contactos individuales
       const chatType = this.getChatType(from);
-      if (chatType !== 'contact') {
+      if (!env.allowGroups && chatType !== 'contact') {
+        this.metrics.skippedMessagesNonContact++;
         console.log(`↩️  Omitiendo mensaje de chat no individual (${chatType}) desde ${from}`);
         return;
       }
@@ -699,12 +707,17 @@ class WhatsAppService {
 
     // Validar destino: solo contactos individuales
     const type = this.getChatType(to);
-    if (type !== 'contact') {
+    if (!env.allowGroups && type !== 'contact') {
       throw new Error('Solo se permite enviar mensajes a contactos individuales (@s.whatsapp.net)');
     }
 
     const { messageId } = await sendMessageUsingSock(sessionId, session.sock, to, text, options);
     this.io?.emit("message-sent", { sessionId, to, text, messageId });
+  }
+
+  // Obtener métricas internas (para monitoreo)
+  getMetrics() {
+    return { ...this.metrics };
   }
 
   async disconnectSession(sessionId: string) {

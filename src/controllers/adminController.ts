@@ -7,6 +7,8 @@ import { Chat } from "../models/Chat";
 import { Message } from "../models/Message";
 import { AuditLog } from "../models/AuditLog";
 import { SecuritySettings } from "../models/SecuritySettings";
+import { whatsappService } from "../services/whatsappService";
+import { env } from "../config/env";
 
 // =====================================================
 // AUDITORÍA - AUDIT LOGS
@@ -488,6 +490,21 @@ export const getSystemHealth = async () => {
       status: "unknown",
       error: (error as Error).message
     };
+  }
+};
+
+export const getWhatsAppMetrics = async (req: Request, res: Response) => {
+  try {
+    const metrics = whatsappService.getMetrics();
+    res.json({
+      success: true,
+      data: {
+        allowGroups: env.allowGroups,
+        metrics,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: (error as Error).message });
   }
 };
 

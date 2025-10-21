@@ -57,6 +57,11 @@ export const sendMessage = async (req: Request, res: Response) => {
     await whatsappService.sendMessage(sessionId, to, text);
     res.json({ success: true });
   } catch (error) {
-    res.status(500).json({ success: false, error: (error as Error).message });
+    const msg = (error as Error).message || "Error";
+    // Si es error de validación (ej: destino no permitido), responder 400
+    if (msg.includes('Solo se permite enviar mensajes a contactos individuales')) {
+      return res.status(400).json({ success: false, error: msg });
+    }
+    res.status(500).json({ success: false, error: msg });
   }
 };

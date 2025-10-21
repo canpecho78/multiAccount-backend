@@ -44,6 +44,11 @@ PORT=5001
 # AUTH_STORAGE can be 'file' or 'mongo'. Default is 'mongo' (recommended for production)
 AUTH_STORAGE=mongo
 
+# Groups behavior
+# ALLOW_GROUPS controls if the system should process and allow sending to WhatsApp groups (@g.us)
+# Set to true to allow groups, false to restrict to individual contacts only (default: false)
+ALLOW_GROUPS=false
+
 # JWT Configuration
 JWT_SECRET=super-secret-change-me
 

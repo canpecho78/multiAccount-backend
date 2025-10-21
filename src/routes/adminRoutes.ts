@@ -2,6 +2,7 @@ import { Router } from "express";
 import {
   getDashboard,
   getSystemHealth,
+  getWhatsAppMetrics,
   getEmployeeMetrics,
   getAssignmentStats,
   getAuditLogs,
@@ -70,6 +71,19 @@ router.get("/dashboard", getDashboard);
  *         description: Métricas de salud del sistema
  */
 router.get("/system/health", getSystemHealth);
+
+/**
+ * @swagger
+ * /api/admin/system/whatsapp-metrics:
+ *   get:
+ *     tags: [Admin]
+ *     security: [{ bearerAuth: [] }]
+ *     summary: Métricas internas de WhatsApp (contadores y flags)
+ *     responses:
+ *       200:
+ *         description: Métricas de WhatsApp
+ */
+router.get("/system/whatsapp-metrics", getWhatsAppMetrics);
 
 /**
  * @swagger
