@@ -1,5 +1,4 @@
 import {
-  default as makeWASocket,
   WASocket,
   DisconnectReason,
   ConnectionState,
@@ -16,32 +15,15 @@ import { Contact } from "../models/Contact";
 import { Server as IOServer } from "socket.io";
 import { useMongoAuthState } from "./mongoAuthState";
 import { sessionManager } from "./sessionManager";
+import { makeSocket, getStore } from "./whatsapp/socketFactory";
+import { bindContactHandlers } from "./whatsapp/events/contacts";
+import { bindMessageHandlers } from "./whatsapp/events/messages";
+import { bindConnectionHandlers } from "./whatsapp/events/connection";
+import { getProfilePictureUsingSock } from "./whatsapp/profile";
+import { sendMessageUsingSock } from "./whatsapp/sendMessage";
+import { generateQrForSession } from "./whatsapp/qr";
 
-// Resolve Baileys makeInMemoryStore across different version layouts
-let store: any = null;
-const resolveMakeInMemoryStore = () => {
-  const candidates = [
-    () => require("@whiskeysockets/baileys").makeInMemoryStore,
-    () => require("@whiskeysockets/baileys/lib/Store").makeInMemoryStore,
-    () => require("@whiskeysockets/baileys/lib/Store/Store").makeInMemoryStore,
-    () => require("@whiskeysockets/baileys/lib/Store/index").makeInMemoryStore,
-    () => require("@whiskeysockets/baileys/lib/Utils/store").makeInMemoryStore,
-  ];
-  for (const get of candidates) {
-    try {
-      const fn = get();
-      if (typeof fn === "function") return fn;
-    } catch (_) {
-      // try next
-    }
-  }
-  return null;
-};
-
-const makeInMemoryStore = resolveMakeInMemoryStore();
-if (makeInMemoryStore) {
-  store = makeInMemoryStore({ logger: P({ level: "silent" }) });
-}
+// store handling moved to socketFactory
 
 export interface SessionData {
   sock: WASocket;
@@ -63,6 +45,14 @@ class WhatsAppService {
 
   getAllSessions() {
     return this.sessions;
+  }
+
+  // Determina el tipo de chat a partir del JID
+  private getChatType(jid: string): 'contact' | 'group' | 'unknown' {
+    if (typeof jid !== 'string') return 'unknown';
+    if (jid.endsWith('@s.whatsapp.net')) return 'contact';
+    if (jid.endsWith('@g.us')) return 'group';
+    return 'unknown';
   }
 
   async initializeExistingSessions() {
@@ -101,24 +91,7 @@ class WhatsAppService {
 
     const { state, saveCreds } = await useMongoAuthState(sessionId);
 
-    const sock = makeWASocket({
-      auth: state,
-      printQRInTerminal: false,
-      logger: P({ level: "silent" }),
-      // Opciones adicionales para v7
-      connectTimeoutMs: 60000,
-      defaultQueryTimeoutMs: 0,
-      keepAliveIntervalMs: 10000,
-      emitOwnEvents: true,
-      syncFullHistory: false,
-      // Forzar nuevo pairing
-      shouldIgnoreJid: () => false,
-    });
-
-    // Bind global store
-    if (store) {
-      store.bind(sock.ev);
-    }
+    const sock = makeSocket(state);
 
     this.sessions[sessionId] = {
       sock,
@@ -126,55 +99,23 @@ class WhatsAppService {
       lastSeen: new Date(),
     };
 
-    sock.ev.on("connection.update", async (update: Partial<ConnectionState> & { qr?: string }) => {
-      const { connection, lastDisconnect, qr } = update as any;
-
-      if (qr) {
-        try {
-          // Generar QR fresco cada vez
-          const qrImage = await qrcode.toDataURL(qr);
-          await sessionManager.updateQRCode(sessionId, qrImage);
-          this.io?.emit("qr", { sessionId, qr: qrImage });
-          console.log(`QR generado para sesión ${sessionId}`);
-        } catch (err) {
-          console.error("Error generando QR", err);
-          await sessionManager.recordConnectionAttempt(sessionId, false, "QR generation failed");
+    // Bind connection events
+    bindConnectionHandlers(sock, sessionId, this.io, {
+      updateSessionState: (sessionId: string, isConnected: boolean, lastSeen: Date) => {
+        if (this.sessions[sessionId]) {
+          this.sessions[sessionId].isConnected = isConnected;
+          this.sessions[sessionId].lastSeen = lastSeen;
         }
-      }
-
-      if (connection === "open") {
-        this.sessions[sessionId].isConnected = true;
-        this.sessions[sessionId].lastSeen = new Date();
-
-        const phone = sock.user?.id?.split(":")[0] || null;
-        const name = sock.user?.name || "Unknown";
-
-        await sessionManager.updateConnectionStatus(sessionId, true, "connected", {
-          phone: phone || undefined,
-          name,
-          platform: "whatsapp",
-        });
-
-        this.io?.emit("connected", { sessionId, status: true });
-
+      },
+      onConnected: async (sessionId: string) => {
         // Preload chats
         await this.loadExistingChats(sessionId, sock, {
           type: "individual",
           limit: Number(process.env.PRELOAD_CHATS_LIMIT || 30),
         });
-
-        await sessionManager.updateChatCount(sessionId);
-      } else if (connection === "close") {
-        const shouldReconnect = (lastDisconnect?.error as Boom)?.output?.statusCode !== DisconnectReason.loggedOut;
-        const reason = (lastDisconnect?.error as any)?.message || "Connection closed";
-
-        this.sessions[sessionId].isConnected = false;
-
-        await sessionManager.updateConnectionStatus(sessionId, false, "disconnected");
-        await sessionManager.recordConnectionAttempt(sessionId, false, reason);
-
-        this.io?.emit("connected", { sessionId, status: false });
-
+      },
+      onDisconnected: async (sessionId: string, reason: string) => {
+        const shouldReconnect = !reason.includes("loggedOut") && !reason.includes("Logged out");
         if (shouldReconnect) {
           console.log(`Reconectando sesión ${sessionId} en 5 segundos`);
           setTimeout(() => this.createSession(sessionId), 5001);
@@ -182,41 +123,34 @@ class WhatsAppService {
           delete this.sessions[sessionId];
           await sessionManager.markAsInactive(sessionId, "Logged out");
         }
-      }
+      },
     });
 
-    sock.ev.on("messages.upsert", async (m) => {
-      if (m.type === "notify") {
-        for (const msg of m.messages) {
-          await this.handleIncomingMessage(sessionId, msg);
-        }
-      }
+    // Bind mensajes y contactos
+    bindMessageHandlers(sock, sessionId, this.io, {
+      onMessage: async (msg: any) => {
+        await this.handleIncomingMessage(sessionId, msg);
+      },
     });
+    bindContactHandlers(sock, sessionId);
 
-    // Guardar contactos (solo individuales, no grupos)
-    sock.ev.on("contacts.upsert", async (contacts: any[]) => {
+    // Manejo de chats: solo contactos individuales (no grupos)
+    sock.ev.on('chats.upsert', async (chats: any[]) => {
       try {
-        for (const contact of contacts) {
-          const jid: string | undefined = contact?.id;
-          if (!jid || typeof jid !== "string") continue;
-          const isGroup = jid.endsWith("@g.us");
-          if (isGroup) continue;
+        for (const chat of chats) {
+          const jid: string | undefined = chat?.id;
+          if (!jid || typeof jid !== 'string') continue;
+          const type = this.getChatType(jid);
+          if (type !== 'contact') {
+            // Saltar grupos u otros tipos (broadcast, status, etc.)
+            continue;
+          }
 
-          const name = contact.name || contact.notify || jid.split("@")[0] || "Desconocido";
-          // Upsert Contact
-          const contactDoc = await Contact.findOneAndUpdate(
-            { jid, sessionId },
-            {
-              name,
-              notify: contact.notify || null,
-              verifiedName: contact.verifiedName || null,
-              imgUrl: contact.imgUrl || null,
-              status: contact.status || null,
-              isGroup: false,
-              updatedAt: new Date(),
-            },
-            { upsert: true, new: true }
-          );
+          const name = (chat?.name || chat?.subject || jid.split('@')[0] || 'Desconocido') as string;
+
+          // Intentar relacionar con Contact ya existente
+          let relatedContact = null as any;
+          try { relatedContact = await Contact.findOne({ jid, sessionId }); } catch {}
 
           await Chat.findOneAndUpdate(
             { chatId: jid, sessionId },
@@ -225,16 +159,60 @@ class WhatsAppService {
               phone: jid,
               isGroup: false,
               updatedAt: new Date(),
-              contactId: contactDoc?._id || null,
+              contactId: relatedContact?._id || null,
             },
             { upsert: true, new: true }
           );
+
+          console.log(`📒 Chat upsert (contacto): ${jid} (${name})`);
         }
-        console.log("Contactos actualizados para sesión:", sessionId);
       } catch (e) {
-        console.warn("No se pudieron actualizar contactos:", e);
+        console.warn(`No se pudieron procesar chats.upsert en sesión ${sessionId}:`, e);
       }
     });
+
+    // Actualizaciones de chats: solo para contactos individuales
+    sock.ev.on('chats.update', async (updates: any[]) => {
+      try {
+        for (const u of updates) {
+          const jid: string | undefined = u?.id;
+          if (!jid || typeof jid !== 'string') continue;
+          const type = this.getChatType(jid);
+          if (type !== 'contact') continue;
+
+          const name = (u?.name || u?.subject) as string | undefined;
+          const payload: any = { updatedAt: new Date() };
+          if (name) payload.name = name;
+
+          await Chat.findOneAndUpdate(
+            { chatId: jid, sessionId },
+            payload,
+            { upsert: false, new: true }
+          );
+
+          console.log(`✏️  Chat update (contacto): ${jid}${name ? ` -> ${name}` : ''}`);
+        }
+      } catch (e) {
+        console.warn(`No se pudieron procesar chats.update en sesión ${sessionId}:`, e);
+      }
+    });
+
+    // Presencia: ignorar grupos, solo registrar eventos de contactos
+    sock.ev.on('presence.update', (presence: any) => {
+      try {
+        const jid: string | undefined = presence?.id || presence?.jid;
+        if (!jid || typeof jid !== 'string') return;
+        const type = this.getChatType(jid);
+        if (type !== 'contact') return;
+
+        const state = presence?.presence || presence?.status || 'unknown';
+        console.log(`👀 Presence contacto ${jid}: ${state}`);
+      } catch (e) {
+        console.warn(`No se pudo procesar presence.update en sesión ${sessionId}:`, e);
+      }
+    });
+
+    // contacts handled by bindContactHandlers
 
     sock.ev.on("creds.update", saveCreds);
 
@@ -250,148 +228,27 @@ class WhatsAppService {
     opts?: { timeoutMs?: number; pollMs?: number; force?: boolean; retries?: number; retryDelayMs?: number }
   ): Promise<{ status: "qr_ready" | "connected" | "pending" | "disconnected" | "error"; qr?: string | null }>
   {
-    const timeoutMs = Math.max(3000, opts?.timeoutMs ?? 20000);
-    const pollMs = Math.max(200, opts?.pollMs ?? 500);
-    const retries = Math.max(0, opts?.retries ?? 1);
-    const retryDelayMs = Math.max(0, opts?.retryDelayMs ?? 1500);
-
-    // Pre-chequeo rápido: si ya hay QR o ya está conectada y no se forzó
-    try {
-      const existingDoc = await Session.findOne({ sessionId }).lean();
-      if (existingDoc?.isConnected) {
-        return { status: "connected" };
+    // Handle session cleanup if force is requested
+    if (opts?.force) {
+      const existing = this.sessions[sessionId];
+      if (existing?.sock) {
+        try { await existing.sock.logout(); } catch {}
+        delete this.sessions[sessionId];
       }
-      if (existingDoc?.qrCode && !opts?.force) {
-        return { status: "qr_ready", qr: existingDoc.qrCode };
-      }
-      // Si la sesión está en estado problemático, forzar limpieza para nuevo QR
-      if (existingDoc && ["inactive", "disconnected", "error"].includes(existingDoc.status as any)) {
-        opts = { ...opts, force: true };
-      }
-    } catch {}
-
-    let attempt = 0;
-    while (true) {
-      // Forzar limpieza si se solicita
-      if (opts?.force) {
-        const existing = this.sessions[sessionId];
-        if (existing?.sock) {
-          try { await existing.sock.logout(); } catch {}
-          delete this.sessions[sessionId];
-        }
-      }
-
-      // Limpiar credenciales si se fuerza o si venimos de estado problemático
-      if (opts?.force) {
-        try { await sessionManager.clearAuth(sessionId); } catch {}
-      }
-
-      // Asegurar documento de sesión en DB y arrancar socket
-      await sessionManager.createOrUpdateSession(sessionId, {
-        status: "pending",
-        isActive: true,
-        isConnected: false,
-        qrCode: null,
-      } as any);
-
-      // Crear socket (forzando QR fresco) si no está en memoria o no conectada
-      const s = this.sessions[sessionId];
-      if (!s || !s.isConnected || opts?.force) {
-        await this.createSession(sessionId);
-      }
-
-      const start = Date.now();
-      while (Date.now() - start < timeoutMs) {
-        const doc = await Session.findOne({ sessionId }).lean();
-        if (doc?.isConnected) {
-          return { status: "connected" };
-        }
-        if (doc?.qrCode) {
-          return { status: "qr_ready", qr: doc.qrCode };
-        }
-        if (doc?.status === "disconnected" || doc?.status === "error") {
-          return { status: (doc.status as any) };
-        }
-        await new Promise((r) => setTimeout(r, pollMs));
-      }
-
-      // Timeout sin QR disponible -> ¿reintentar?
-      if (attempt < retries) {
-        attempt++;
-        await new Promise((r) => setTimeout(r, retryDelayMs));
-        // En reintento, forzamos nuevo QR
-        opts = { ...opts, force: true };
-        continue;
-      }
-
-      const latest = await Session.findOne({ sessionId }).lean();
-      return {
-        status: (latest?.status as any) || "pending",
-        qr: latest?.qrCode || null,
-      };
     }
+
+    return await generateQrForSession(sessionId, (sessionId) => this.createSession(sessionId), opts);
   }
 
   /**
-   * Obtener foto de perfil de un contacto y guardar en MongoDB
+   * Obtener foto de perfil de un contacto y guardar en MongoDB (delegado)
    */
   async getProfilePicture(sessionId: string, jid: string): Promise<string | null> {
-    try {
-      const session = this.sessions[sessionId];
-      if (!session || !session.isConnected) {
-        throw new Error("Sesión no conectada");
-      }
-
-      // Verificar si ya existe en la base de datos (cache)
-      const existing = await Media.findOne({
-        sessionId,
-        chatId: jid,
-        mediaType: "profile-pic",
-      }).sort({ createdAt: -1 });
-
-      // Si existe y tiene menos de 24 horas, retornar el existente
-      if (existing && (Date.now() - existing.createdAt.getTime()) < 24 * 60 * 60 * 1000) {
-        return existing.fileId;
-      }
-
-      // Intentar obtener la foto de perfil en alta calidad
-      const profilePicUrl = await session.sock.profilePictureUrl(jid, "image");
-      
-      if (!profilePicUrl) {
-        console.log(`No profile picture found for ${jid}`);
-        return null;
-      }
-
-      // Descargar la imagen
-      const response = await fetch(profilePicUrl);
-      const arrayBuffer = await response.arrayBuffer();
-      const buffer = Buffer.from(arrayBuffer);
-      
-      // Generar ID único
-      const fileId = `profile_${jid.replace(/[@:.]/g, "_")}_${Date.now()}`;
-      
-      // Guardar en MongoDB
-      await Media.create({
-        fileId,
-        messageId: `profile_${jid}`, // ID especial para fotos de perfil
-        sessionId,
-        chatId: jid,
-        mediaType: "profile-pic",
-        filename: `${fileId}.jpg`,
-        mimetype: "image/jpeg",
-        size: buffer.length,
-        data: buffer,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      });
-      
-      console.log(`✅ Profile picture saved in MongoDB: ${fileId}`);
-      
-      return fileId;
-    } catch (error) {
-      console.error(`Error getting profile picture for ${jid}:`, error);
-      return null;
+    const session = this.sessions[sessionId];
+    if (!session || !session.isConnected) {
+      throw new Error("Sesión no conectada");
     }
+    return await getProfilePictureUsingSock(session.sock, sessionId, jid);
   }
 
   /**
@@ -530,6 +387,13 @@ class WhatsAppService {
       const from = msg.key.remoteJid;
       const messageId = msg.key.id;
       const timestamp = new Date(msg.messageTimestamp * 1000);
+
+      // Filtrar grupos: solo procesamos contactos individuales
+      const chatType = this.getChatType(from);
+      if (chatType !== 'contact') {
+        console.log(`↩️  Omitiendo mensaje de chat no individual (${chatType}) desde ${from}`);
+        return;
+      }
 
       // Extraer contenido del mensaje según el tipo
       let messageContent = "";
@@ -707,8 +571,9 @@ class WhatsAppService {
 
       console.log(`📱 Cargando chats individuales para sesión ${sessionId} (límite: ${limit})...`);
 
-      if (store) {
-        const all = store.chats.all() as any[];
+      const memStore = getStore();
+      if (memStore) {
+        const all = memStore.chats.all() as any[];
         
         const individuals = all
           .filter((c) => {
@@ -814,17 +679,17 @@ class WhatsAppService {
   }
 
   /**
-   * Enviar mensaje con multimedia desde MongoDB
+   * Enviar mensaje (delegado a sendMessageUsingSock)
    */
   async sendMessage(
     sessionId: string,
     to: string,
     text: string,
     options?: {
-      mediaFileId?: string; // ID del archivo en MongoDB
+      mediaFileId?: string;
       caption?: string;
       mediaType?: 'image' | 'video' | 'audio' | 'document' | 'sticker' | 'voice';
-      fileBuffer?: Buffer; // Buffer directo para medio
+      fileBuffer?: Buffer;
       filename?: string;
       mimetype?: string;
     }
@@ -832,120 +697,13 @@ class WhatsAppService {
     const session = this.sessions[sessionId];
     if (!session || !session.isConnected) throw new Error("Sesión no conectada");
 
-    const messageId = `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-
-    // Si hay multimedia, cargar desde MongoDB y enviar
-    if (options?.mediaFileId) {
-      const mediaDoc = await Media.findOne({ fileId: options.mediaFileId });
-      
-      if (!mediaDoc) {
-        throw new Error(`Media file not found: ${options.mediaFileId}`);
-      }
-
-      const buffer = mediaDoc.data;
-      const mediaOptions: any = {};
-      
-      switch (mediaDoc.mediaType) {
-        case "image":
-          mediaOptions.image = buffer;
-          mediaOptions.caption = options.caption || text;
-          break;
-        case "video":
-          mediaOptions.video = buffer;
-          mediaOptions.caption = options.caption || text;
-          break;
-        case "audio":
-        case "voice":
-          mediaOptions.audio = buffer;
-          mediaOptions.mimetype = mediaDoc.mimetype;
-          mediaOptions.ptt = mediaDoc.isVoiceNote;
-          break;
-        case "document":
-          mediaOptions.document = buffer;
-          mediaOptions.fileName = mediaDoc.originalFilename || mediaDoc.filename;
-          mediaOptions.mimetype = mediaDoc.mimetype;
-          break;
-        case "sticker":
-          mediaOptions.sticker = buffer;
-          break;
-      }
-      
-      await session.sock.sendMessage(to, mediaOptions);
-    } else if (options?.fileBuffer && options.mediaType) {
-      // Enviar usando buffer directo
-      const mediaOptions: any = { caption: options.caption || text };
-      switch (options.mediaType) {
-        case 'image':
-          mediaOptions.image = options.fileBuffer;
-          break;
-        case 'video':
-          mediaOptions.video = options.fileBuffer;
-          break;
-        case 'audio':
-        case 'voice':
-          mediaOptions.audio = options.fileBuffer;
-          mediaOptions.mimetype = options.mimetype || 'audio/mp4';
-          if (options.mediaType === 'voice') mediaOptions.ptt = true;
-          break;
-        case 'document':
-          mediaOptions.document = options.fileBuffer;
-          mediaOptions.fileName = options.filename || 'document';
-          mediaOptions.mimetype = options.mimetype || 'application/octet-stream';
-          break;
-        case 'sticker':
-          mediaOptions.sticker = options.fileBuffer;
-          break;
-      }
-      await session.sock.sendMessage(to, mediaOptions);
-
-      // Guardar el medio enviado en MongoDB
-      const mediaId = options.mediaFileId || `media_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-      await Media.create({
-        fileId: mediaId,
-        messageId,
-        sessionId,
-        chatId: to,
-        mediaType: options.mediaType === 'voice' ? 'audio' : (options.mediaType || 'document'),
-        filename: options.filename || 'unknown',
-        originalFilename: options.filename || null,
-        mimetype: options.mimetype || 'application/octet-stream',
-        size: options.fileBuffer.length,
-        data: options.fileBuffer,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      });
-    } else {
-      // Enviar solo texto
-      await session.sock.sendMessage(to, { text });
+    // Validar destino: solo contactos individuales
+    const type = this.getChatType(to);
+    if (type !== 'contact') {
+      throw new Error('Solo se permite enviar mensajes a contactos individuales (@s.whatsapp.net)');
     }
 
-    // Relacionar contacto en mensajes salientes
-    let toContact = null as any;
-    try { toContact = await Contact.findOne({ jid: to, sessionId }); } catch {}
-
-    await Message.create({
-      messageId,
-      chatId: to,
-      sessionId,
-      contactId: toContact?._id || null,
-      from: sessionId,
-      to,
-      body: text,
-      fromMe: true,
-      timestamp: new Date(),
-      status: "sent",
-      mediaUrl: options?.mediaFileId || null,
-    });
-
-    // Incrementar contador de mensajes enviados
-    await sessionManager.incrementMessageCount(sessionId, "sent");
-
-    await Chat.findOneAndUpdate(
-      { chatId: to, sessionId },
-      { lastMessage: text, lastMessageTime: new Date(), updatedAt: new Date() },
-      { upsert: true }
-    );
-
+    const { messageId } = await sendMessageUsingSock(sessionId, session.sock, to, text, options);
     this.io?.emit("message-sent", { sessionId, to, text, messageId });
   }
 
