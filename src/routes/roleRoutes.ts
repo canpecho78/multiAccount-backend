@@ -1,11 +1,14 @@
 import { Router } from "express";
-import { createRole, deleteRole, getRole, listRoles, updateRole } from "../controllers/roleController";
-import { verifyJWT, requireRoles } from "../middleware/auth";
+import { createRole, deleteRole, getRole, listRoles, updateRole, getAvailablePermissions } from "../controllers/roleController";
+import { verifyJWT, checkPermission } from "../middleware/auth";
 
 const router = Router();
 
-// Only administrator can manage roles
-router.use(verifyJWT, requireRoles("administrator"));
+// Todos los endpoints requieren autenticación
+router.use(verifyJWT);
+
+// Solo usuarios con permiso 'users.manage_roles' pueden gestionar roles
+router.use(checkPermission('users.manage_roles'));
 
 /**
  * @swagger
@@ -26,6 +29,19 @@ router.use(verifyJWT, requireRoles("administrator"));
  *         description: Lista de roles
  */
 router.get("/", listRoles);
+
+/**
+ * @swagger
+ * /api/roles/permissions:
+ *   get:
+ *     tags: [Roles]
+ *     security: [{ bearerAuth: [] }]
+ *     summary: Obtener lista de permisos disponibles
+ *     responses:
+ *       200:
+ *         description: Lista de permisos
+ */
+router.get("/permissions", getAvailablePermissions);
 
 /**
  * @swagger

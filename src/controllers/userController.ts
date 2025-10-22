@@ -87,3 +87,141 @@ export const deactivateUser = async (req: Request, res: Response) => {
   if (!user) return res.status(404).json({ success: false, error: "Usuario no encontrado" });
   res.json({ success: true, data: { id: user.id, name: user.name, email: user.email, role: (user.role as any)?.name, active: user.active } });
 };
+
+/**
+ * Obtener permisos del usuario actual
+ */
+export const getCurrentUserPermissions = async (req: Request, res: Response) => {
+  try {
+    const userId = (req as any).user?.sub;
+    
+    if (!userId) {
+      return res.status(401).json({ success: false, error: "No autenticado" });
+    }
+
+    const user = await User.findById(userId).populate("role");
+    
+    if (!user) {
+      return res.status(404).json({ success: false, error: "Usuario no encontrado" });
+    }
+
+    const userRole = user.role as any;
+    
+    if (!userRole) {
+      return res.json({
+        success: true,
+        data: {
+          role: null,
+          permissions: []
+        }
+      });
+    }
+
+    res.json({
+      success: true,
+      data: {
+        role: userRole.name,
+        displayName: userRole.displayName,
+        permissions: userRole.permissions || [],
+        isSystem: userRole.isSystem || false
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: (error as Error).message });
+  }
+};
+
+/**
+ * Verificar si el usuario actual tiene un permiso específico
+ */
+export const checkCurrentUserPermission = async (req: Request, res: Response) => {
+  try {
+    const userId = (req as any).user?.sub;
+    const { permission } = req.body as { permission: string };
+    
+    if (!userId) {
+      return res.status(401).json({ success: false, error: "No autenticado" });
+    }
+
+    if (!permission) {
+      return res.status(400).json({ success: false, error: "permission es requerido" });
+    }
+
+    const user = await User.findById(userId).populate("role");
+    
+    if (!user) {
+      return res.status(404).json({ success: false, error: "Usuario no encontrado" });
+    }
+
+    const userRole = user.role as any;
+    
+    if (!userRole) {
+      return res.json({
+        success: true,
+        hasPermission: false
+      });
+    }
+
+    // Los administradores tienen todos los permisos
+    if (userRole.name === "administrator") {
+      return res.json({
+        success: true,
+        hasPermission: true
+      });
+    }
+
+    const permissions = userRole.permissions || [];
+    const hasPermission = permissions.includes(permission);
+
+    res.json({
+      success: true,
+      hasPermission
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: (error as Error).message });
+  }
+};
+
+/**
+ * Obtener información completa del usuario actual
+ */
+export const getCurrentUser = async (req: Request, res: Response) => {
+  try {
+    const userId = (req as any).user?.sub;
+    
+    if (!userId) {
+      return res.status(401).json({ success: false, error: "No autenticado" });
+    }
+
+    const user = await User.findById(userId).populate("role");
+    
+    if (!user) {
+      return res.status(404).json({ success: false, error: "Usuario no encontrado" });
+    }
+
+    const userRole = user.role as any;
+
+    res.json({
+      success: true,
+      data: {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        role: {
+          _id: userRole?._id,
+          name: userRole?.name,
+          displayName: userRole?.displayName,
+          permissions: userRole?.permissions || [],
+          isSystem: userRole?.isSystem || false
+        },
+        active: user.active,
+        department: user.department,
+        position: user.position,
+        lastLogin: user.lastLogin,
+        createdAt: user.createdAt
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: (error as Error).message });
+  }
+};

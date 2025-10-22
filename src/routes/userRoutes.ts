@@ -1,19 +1,78 @@
 import { Router } from "express";
-import { createUser, deleteUser, getUser, listUsers, updateUser, changeUserRole, activateUser, deactivateUser } from "../controllers/userController";
-import { verifyJWT, requireRoles } from "../middleware/auth";
+import {
+  createUser,
+  deleteUser,
+  getUser,
+  listUsers,
+  updateUser,
+  changeUserRole,
+  activateUser,
+  deactivateUser,
+  getCurrentUser,
+  getCurrentUserPermissions,
+  checkCurrentUserPermission
+} from "../controllers/userController";
+import { verifyJWT, requireRoles, checkPermission } from "../middleware/auth";
 
 const router = Router();
-
-// For now, only administrator can manage users
-router.use(verifyJWT, requireRoles("administrator"));
 
 /**
  * @swagger
  * tags:
  *   - name: Users
- *     description: Gestión de usuarios (solo administrador)
+ *     description: Gestión de usuarios
  */
 
+// Rutas públicas (solo requieren autenticación)
+/**
+ * @swagger
+ * /api/users/me:
+ *   get:
+ *     tags: [Users]
+ *     security: [{ bearerAuth: [] }]
+ *     summary: Obtener información del usuario actual
+ *     responses:
+ *       200:
+ *         description: Información del usuario
+ */
+router.get("/me", verifyJWT, getCurrentUser);
+
+/**
+ * @swagger
+ * /api/users/me/permissions:
+ *   get:
+ *     tags: [Users]
+ *     security: [{ bearerAuth: [] }]
+ *     summary: Obtener permisos del usuario actual
+ *     responses:
+ *       200:
+ *         description: Permisos del usuario
+ */
+router.get("/me/permissions", verifyJWT, getCurrentUserPermissions);
+
+/**
+ * @swagger
+ * /api/users/me/check-permission:
+ *   post:
+ *     tags: [Users]
+ *     security: [{ bearerAuth: [] }]
+ *     summary: Verificar si el usuario tiene un permiso específico
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [permission]
+ *             properties:
+ *               permission: { type: string }
+ *     responses:
+ *       200:
+ *         description: Resultado de la verificación
+ */
+router.post("/me/check-permission", verifyJWT, checkCurrentUserPermission);
+
+// Rutas administrativas (requieren permiso users.view o users.manage_roles)
 /**
  * @swagger
  * /api/users:
@@ -35,7 +94,7 @@ router.use(verifyJWT, requireRoles("administrator"));
  *       200:
  *         description: Lista de usuarios
  */
-router.get("/", listUsers);
+router.get("/", verifyJWT, checkPermission('users.view'), listUsers);
 
 /**
  * @swagger
@@ -53,7 +112,7 @@ router.get("/", listUsers);
  *       200:
  *         description: Usuario
  */
-router.get("/:id", getUser);
+router.get("/:id", verifyJWT, checkPermission('users.view'), getUser);
 
 /**
  * @swagger
@@ -78,7 +137,7 @@ router.get("/:id", getUser);
  *       201:
  *         description: Usuario creado
  */
-router.post("/", createUser);
+router.post("/", verifyJWT, checkPermission('users.create'), createUser);
 
 /**
  * @swagger
@@ -107,7 +166,7 @@ router.post("/", createUser);
  *       200:
  *         description: Usuario actualizado
  */
-router.put("/:id", updateUser);
+router.put("/:id", verifyJWT, checkPermission('users.edit'), updateUser);
 
 /**
  * @swagger
@@ -125,7 +184,7 @@ router.put("/:id", updateUser);
  *       200:
  *         description: Eliminado
  */
-router.delete("/:id", deleteUser);
+router.delete("/:id", verifyJWT, checkPermission('users.delete'), deleteUser);
 
 /**
  * @swagger
@@ -152,7 +211,7 @@ router.delete("/:id", deleteUser);
  *       200:
  *         description: Rol actualizado
  */
-router.patch("/:id/role", changeUserRole);
+router.patch("/:id/role", verifyJWT, checkPermission('users.manage_roles'), changeUserRole);
 
 /**
  * @swagger
@@ -170,7 +229,7 @@ router.patch("/:id/role", changeUserRole);
  *       200:
  *         description: Activado
  */
-router.post("/:id/activate", activateUser);
+router.post("/:id/activate", verifyJWT, checkPermission('users.edit'), activateUser);
 
 /**
  * @swagger
@@ -188,6 +247,6 @@ router.post("/:id/activate", activateUser);
  *       200:
  *         description: Desactivado
  */
-router.post("/:id/deactivate", deactivateUser);
+router.post("/:id/deactivate", verifyJWT, checkPermission('users.edit'), deactivateUser);
 
 export default router;
